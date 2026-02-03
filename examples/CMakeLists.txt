@@ -28,7 +28,6 @@ target_link_libraries(client_test PRIVATE torrent-rasterbar)
 
 add_executable(client_test_piece_cache
     client_test_piece_cache.cpp
-    client_test_piece_cache_utils.cpp
     print.cpp
     torrent_view.cpp
     session_view.cpp
