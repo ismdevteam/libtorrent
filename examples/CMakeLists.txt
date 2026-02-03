@@ -11,7 +11,7 @@ set(single_file_examples
     upnp_test)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES Clang)
-    add_compile_options(-Wno-implicit-int-float-conversion)
+	add_compile_options(-Wno-implicit-int-float-conversion)
 endif()
 
 foreach(example ${single_file_examples})
@@ -26,25 +26,10 @@ add_executable(client_test
     session_view.cpp)
 target_link_libraries(client_test PRIVATE torrent-rasterbar)
 
-# Piece cache example with modular structure
 add_executable(client_test_piece_cache
     client_test_piece_cache.cpp
     print.cpp
     torrent_view.cpp
     session_view.cpp
-    piece_cache_manager.cpp
-    cache_config.cpp
-    cache_alerts.cpp
-    torrent_utils.cpp
-    file_utils.cpp)
-
+    piece_cache_manager.cpp)
 target_link_libraries(client_test_piece_cache PRIVATE torrent-rasterbar)
-
-# OpenSSL is required for SHA1 hashing in piece_cache_manager.cpp
-#find_package(OpenSSL)
-#if(OPENSSL_FOUND)
-#    target_link_libraries(client_test_piece_cache PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-#endif()
-
-# Set C++14 standard (changed from C++14)
-#target_compile_features(client_test_piece_cache PRIVATE cxx_std_14)
