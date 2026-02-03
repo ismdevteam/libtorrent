@@ -240,7 +240,7 @@ std::string generate_cid_hash(const std::string& input)
     return hash;
 }
 
-// ADDED: Function to create CID directory structure
+// ADDED: Function to create complete CID directory structure
 void create_cid_structure(const std::string& dummy_base, 
                          const lt::torrent_info& ti, 
                          const std::string& info_hash_str)
@@ -254,10 +254,11 @@ void create_cid_structure(const std::string& dummy_base,
     mkdir(torrent_base.c_str(), 0777);
 #endif
     
-    // For multi-file torrents, we need to handle directory structure
+    // For multi-file torrents
     if (ti.num_files() > 1) {
-        // Create CID for the torrent root directory
-        std::string torrent_cid = generate_cid_hash(ti.name());
+        // Create CID for the torrent root directory (torrent name)
+        std::string torrent_name = ti.name();
+        std::string torrent_cid = generate_cid_hash(torrent_name);
         std::string torrent_cid_dir = torrent_base + "/" + torrent_cid;
         
 #ifdef TORRENT_WINDOWS
@@ -272,10 +273,10 @@ void create_cid_structure(const std::string& dummy_base,
             lt::string_view file_path_sv = ti.files().file_path(i);
             std::string file_path(file_path_sv.data(), file_path_sv.size());
             
-            // Generate CID for the file
+            // Generate CID for the file (full path)
             std::string file_cid = generate_cid_hash(file_path);
             
-            // Create the file with CID name
+            // Create the file with CID name directly in torrent CID directory
             std::string cid_file_path = torrent_cid_dir + "/" + file_cid;
             
             // Create any necessary parent directories
@@ -294,8 +295,9 @@ void create_cid_structure(const std::string& dummy_base,
             }
         }
     } else if (ti.num_files() == 1) {
-        // Single file torrent - create CID for the file directly
-        std::string file_name = ti.files().file_name(file_index_t(0)).to_string();
+        // Single file torrent
+        lt::string_view file_name_sv = ti.files().file_name(file_index_t(0));
+        std::string file_name(file_name_sv.data(), file_name_sv.size());
         std::string file_cid = generate_cid_hash(file_name);
         
         // Create file with CID name directly in torrent base
@@ -329,44 +331,59 @@ void migrate_to_cid_structure(const lt::torrent_info& ti)
     if (ret == 0 && (st.st_mode & S_IFDIR)) {
         // For multi-file torrents
         if (ti.num_files() > 1) {
-            // Create CID directory for torrent
-            std::string torrent_cid = generate_cid_hash(ti.name());
+            // Generate CID for torrent name
+            std::string torrent_name = ti.name();
+            std::string torrent_cid = generate_cid_hash(torrent_name);
             std::string new_torrent_path = old_torrent_path + "/" + torrent_cid;
             
-            // First, rename the old directory to CID directory
-            if (rename(old_torrent_path.c_str(), new_torrent_path.c_str()) == 0) {
-                std::printf("Migrated directory to CID: %s\n", new_torrent_path.c_str());
-                
-                // Now process files inside the directory
-                for (lt::file_index_t i(0); i < ti.num_files(); ++i) {
-                    // Get the full file path
-                    lt::string_view full_file_path_sv = ti.files().file_path(i);
-                    std::string full_file_path(full_file_path_sv.data(), full_file_path_sv.size());
-                    
-                    // Extract just the filename (last component)
-                    size_t last_slash = full_file_path.find_last_of('/');
-                    std::string old_file_name = (last_slash != std::string::npos) ? 
-                        full_file_path.substr(last_slash + 1) : full_file_path;
-                    
-                    // Generate CID for the full file path
-                    std::string file_cid = generate_cid_hash(full_file_path);
-                    
-                    // Build old and new paths
-                    std::string old_full_path = new_torrent_path + "/" + old_file_name;
-                    std::string new_full_path = new_torrent_path + "/" + file_cid;
-                    
-                    // Check if file exists before renaming
+            // First, check if old structure has the original torrent name directory
+            std::string old_torrent_name_path = old_torrent_path + "/" + torrent_name;
+            
 #ifdef TORRENT_WINDOWS
-                    ret = _stat(old_full_path.c_str(), &st);
+            ret = _stat(old_torrent_name_path.c_str(), &st);
 #else
-                    ret = stat(old_full_path.c_str(), &st);
+            ret = stat(old_torrent_name_path.c_str(), &st);
 #endif
-                    if (ret == 0 && (st.st_mode & S_IFREG)) {
-                        if (rename(old_full_path.c_str(), new_full_path.c_str()) == 0) {
-                            std::printf("  Renamed %s to %s\n", old_file_name.c_str(), file_cid.c_str());
+            
+            if (ret == 0 && (st.st_mode & S_IFDIR)) {
+                // Rename torrent name directory to CID directory
+                if (rename(old_torrent_name_path.c_str(), new_torrent_path.c_str()) == 0) {
+                    std::printf("Renamed torrent directory: %s to %s\n", torrent_name.c_str(), torrent_cid.c_str());
+                    
+                    // Now rename files inside the directory
+                    for (lt::file_index_t i(0); i < ti.num_files(); ++i) {
+                        // Get the full file path
+                        lt::string_view full_file_path_sv = ti.files().file_path(i);
+                        std::string full_file_path(full_file_path_sv.data(), full_file_path_sv.size());
+                        
+                        // Extract just the filename (last component)
+                        size_t last_slash = full_file_path.find_last_of('/');
+                        std::string old_file_name = (last_slash != std::string::npos) ? 
+                            full_file_path.substr(last_slash + 1) : full_file_path;
+                        
+                        // Generate CID for the full file path
+                        std::string file_cid = generate_cid_hash(full_file_path);
+                        
+                        // Build old and new paths
+                        std::string old_full_path = new_torrent_path + "/" + old_file_name;
+                        std::string new_full_path = new_torrent_path + "/" + file_cid;
+                        
+                        // Check if file exists before renaming
+#ifdef TORRENT_WINDOWS
+                        ret = _stat(old_full_path.c_str(), &st);
+#else
+                        ret = stat(old_full_path.c_str(), &st);
+#endif
+                        if (ret == 0 && (st.st_mode & S_IFREG)) {
+                            if (rename(old_full_path.c_str(), new_full_path.c_str()) == 0) {
+                                std::printf("  Renamed file: %s to %s\n", old_file_name.c_str(), file_cid.c_str());
+                            }
                         }
                     }
                 }
+            } else {
+                // No torrent name directory, check for flat structure
+                std::printf("No torrent name directory found at: %s\n", old_torrent_name_path.c_str());
             }
         } else if (ti.num_files() == 1) {
             // Single file torrent - just rename the file
@@ -1058,16 +1075,35 @@ void set_torrent_params(lt::add_torrent_params& p)
             
             // CRITICAL: Tell libtorrent to skip file verification
             p.flags |= lt::torrent_flags::seed_mode;
-            // Note: override_resume_data is deprecated in newer versions
-            // but we keep it for compatibility with older libtorrent
             p.flags |= lt::torrent_flags::override_trackers;
             p.flags |= lt::torrent_flags::override_web_seeds;
             
             log_message("Seed-from-cache: Using unique dummy path, skipping file checks");
         } else {
-            // Regular fileless mode
-            p.save_path = dummy_base + "/fileless";
-            log_message("Fileless mode: Using dummy path");
+            // Regular fileless mode - also create CID structure
+            std::string hash_str = to_hex(p.info_hashes.get_best());
+            
+            // Check if we have torrent info to create CID structure
+            if (p.ti) {
+                // Create CID-based directory structure
+                create_cid_structure(dummy_base, *p.ti, hash_str);
+                
+                // Set save_path based on whether it's multi-file or single-file
+                if (p.ti->num_files() > 1) {
+                    // Multi-file torrent: use CID directory
+                    std::string torrent_cid = generate_cid_hash(p.ti->name());
+                    p.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
+                    log_message("Fileless mode (multi-file): Using CID directory: " + p.save_path);
+                } else if (p.ti->num_files() == 1) {
+                    // Single-file torrent: use base directory
+                    p.save_path = dummy_base + "/cache_seed/" + hash_str;
+                    log_message("Fileless mode (single-file): Using base directory: " + p.save_path);
+                }
+            } else {
+                // Fallback to old behavior if no torrent info
+                p.save_path = dummy_base + "/fileless";
+                log_message("Fileless mode: Using default dummy path");
+            }
         }
     } else {
         p.save_path = save_path;
@@ -1102,10 +1138,15 @@ lt::add_torrent_params create_cache_resume_data(lt::info_hash_t const& info_hash
     if (seed_from_cache && ti) {
         std::string dummy_base = "/tmp/lt_dummy";
         std::string hash_str = to_hex(info_hash.get_best());
-        std::string torrent_cid = generate_cid_hash(ti->name());
-        p.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
         
-        log_message("Resume data: Using CID-based save path: " + p.save_path);
+        if (ti->num_files() > 1) {
+            std::string torrent_cid = generate_cid_hash(ti->name());
+            p.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
+            log_message("Resume data (multi-file): Using CID-based save path: " + p.save_path);
+        } else if (ti->num_files() == 1) {
+            p.save_path = dummy_base + "/cache_seed/" + hash_str;
+            log_message("Resume data (single-file): Using base save path: " + p.save_path);
+        }
     }
     
     if (cache_manager && ti) {
@@ -1122,7 +1163,6 @@ lt::add_torrent_params create_cache_resume_data(lt::info_hash_t const& info_hash
         
         // CRITICAL: Set these flags to avoid file checking
         p.flags |= lt::torrent_flags::seed_mode;
-        // Note: override_resume_data is deprecated
         p.flags |= lt::torrent_flags::override_trackers;
         p.flags |= lt::torrent_flags::override_web_seeds;
         
@@ -1157,9 +1197,15 @@ bool add_torrent(lt::session& ses, std::string torrent) try
             if (seed_from_cache && atp.ti) {
                 std::string dummy_base = "/tmp/lt_dummy";
                 std::string hash_str = to_hex(atp.info_hashes.get_best());
-                std::string torrent_cid = generate_cid_hash(atp.ti->name());
-                atp.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
-                log_message("Loaded resume data, updated to CID path: " + atp.save_path);
+                
+                if (atp.ti->num_files() > 1) {
+                    std::string torrent_cid = generate_cid_hash(atp.ti->name());
+                    atp.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
+                    log_message("Loaded resume data, updated to CID path: " + atp.save_path);
+                } else if (atp.ti->num_files() == 1) {
+                    atp.save_path = dummy_base + "/cache_seed/" + hash_str;
+                    log_message("Loaded resume data, updated to base path: " + atp.save_path);
+                }
             }
         }
     }
@@ -1323,7 +1369,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
     if (a->type() == lt::read_piece_alert::alert_type)
     {
         auto* rp = lt::alert_cast<lt::read_piece_alert>(a);
-        if (rp && cache_manager)
+        if (rp && cache_manager && enable_piece_cache)
         {
             // Get the torrent handle and info hash
             auto handle = rp->handle;
@@ -1352,7 +1398,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
     else if (a->type() == lt::piece_finished_alert::alert_type)
     {
         auto* pf = lt::alert_cast<lt::piece_finished_alert>(a);
-        if (pf && cache_manager && cache_during_download)
+        if (pf && cache_manager && cache_during_download && enable_piece_cache)
         {
             auto handle = pf->handle;
             if (handle.is_valid())
@@ -1384,14 +1430,14 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
             if (handle.is_valid() && handle.status().has_metadata)
             {
                 // Migrate existing dummy files to CID structure if needed
-                if (seed_from_cache) {
+                if (disable_original_storage) {
                     auto ti = handle.torrent_file();
                     if (ti) {
                         migrate_to_cid_structure(*ti);
                     }
                 }
                 
-                if (cache_manager) {
+                if (cache_manager && enable_piece_cache) {
                     try {
                         lt::info_hash_t ih = handle.info_hashes();
                         if (g_initialized_torrents.find(ih) == g_initialized_torrents.end())
@@ -1412,7 +1458,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
     else if (a->type() == lt::metadata_received_alert::alert_type)
     {
         auto* mra = lt::alert_cast<lt::metadata_received_alert>(a);
-        if (mra && cache_manager)
+        if (mra && cache_manager && enable_piece_cache)
         {
             auto handle = mra->handle;
             if (handle.is_valid() && handle.status().has_metadata)
@@ -1502,13 +1548,13 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
 		int ret = ::stat(cert.c_str(), &st);
 		if (ret < 0 || (st.st_mode & S_IFREG) == 0)
 #endif
-		{
-			char msg[256];
-			std::snprintf(msg, sizeof(msg), "ERROR. could not load certificate %s: %s\n"
-				, cert.c_str(), std::strerror(errno));
-			if (g_log_file) std::fprintf(g_log_file, "[%s] %s\n", timestamp(), msg);
-			return true;
-		}
+	{
+		char msg[256];
+		std::snprintf(msg, sizeof(msg), "ERROR. could not load certificate %s: %s\n"
+			, cert.c_str(), std::strerror(errno));
+		if (g_log_file) std::fprintf(g_log_file, "[%s] %s\n", timestamp(), msg);
+		return true;
+	}
 
 #ifdef TORRENT_WINDOWS
 		ret = ::_stat(priv.c_str(), &st);
@@ -1517,21 +1563,21 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
 		ret = ::stat(priv.c_str(), &st);
 		if (ret < 0 || (st.st_mode & S_IFREG) == 0)
 #endif
-		{
-			char msg[256];
-			std::snprintf(msg, sizeof(msg), "ERROR. could not load private key %s: %s\n"
-				, priv.c_str(), std::strerror(errno));
-			if (g_log_file) std::fprintf(g_log_file, "[%s] %s\n", timestamp(), msg);
-			return true;
-		}
-
+	{
 		char msg[256];
-		std::snprintf(msg, sizeof(msg), "loaded certificate %s and key %s\n", cert.c_str(), priv.c_str());
+		std::snprintf(msg, sizeof(msg), "ERROR. could not load private key %s: %s\n"
+			, priv.c_str(), std::strerror(errno));
 		if (g_log_file) std::fprintf(g_log_file, "[%s] %s\n", timestamp(), msg);
-
-		h.set_ssl_certificate(cert, priv, "certificates/dhparams.pem", "1234");
-		h.resume();
+		return true;
 	}
+
+	char msg[256];
+	std::snprintf(msg, sizeof(msg), "loaded certificate %s and key %s\n", cert.c_str(), priv.c_str());
+	if (g_log_file) std::fprintf(g_log_file, "[%s] %s\n", timestamp(), msg);
+
+	h.set_ssl_certificate(cert, priv, "certificates/dhparams.pem", "1234");
+	h.resume();
+}
 #endif
 
 	// don't log every peer we try to connect to
@@ -1597,7 +1643,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
 		p->handle.set_max_connections(max_connections_per_torrent / 2);
 
 		// ADDED: Read all pieces when torrent finishes to cache them
-		if (cache_manager)
+		if (cache_manager && enable_piece_cache)
 		{
 			auto handle = p->handle;
 		 if (handle.is_valid() && handle.status().has_metadata)
@@ -1913,9 +1959,8 @@ int main(int argc, char* argv[])
 	torrent_view view;
 	session_view ses_view;
 	
-	// Initialize piece cache
-	if (enable_piece_cache || disable_original_storage)
-	{
+	// Initialize piece cache only if not in seed-from-cache mode
+	if (enable_piece_cache && seed_from_cache) {
 		try
 		{
 			cache_manager = std::make_unique<PieceCacheManager>(cache_root);
@@ -1933,6 +1978,10 @@ int main(int argc, char* argv[])
 			log_message("Failed to initialize piece cache: " + std::string(e.what()));
 			enable_piece_cache = false;
 		}
+	} else if (!seed_from_cache) {
+		// Disable piece cache when not in seed-from-cache mode
+		enable_piece_cache = false;
+		log_message("Piece cache disabled: Not in seed-from-cache mode");
 	}
 	
 	lt::session_params params;
@@ -1940,7 +1989,7 @@ int main(int argc, char* argv[])
 	// ADDED: Set session-wide disabled storage if -Z or -S flag is set
 	if (disable_original_storage) {
 		params.disk_io_constructor = lt::disabled_disk_io_constructor;
-		log_message("Disk I/O disabled: Using piece cache for all storage operations");
+		log_message("Disk I/O disabled: Using dummy path for all storage operations");
 	}
 	
 #ifndef TORRENT_DISABLE_DHT
@@ -2110,6 +2159,7 @@ int main(int argc, char* argv[])
 	log_message("-S (Seed-from-cache): " + std::string(seed_from_cache ? "ENABLED" : "disabled"));
 	log_message("-G (Seed mode): " + std::string(seed_mode ? "ENABLED" : "disabled"));
 	log_message("-C (Cache during download): " + std::string(cache_during_download ? "ENABLED" : "disabled"));
+	log_message("Cache enabled: " + std::string(enable_piece_cache ? "YES" : "NO"));
 	log_message("Cache root: " + cache_root);
 	log_message("Save path: " + save_path);
 	log_message("=================================");
@@ -2460,7 +2510,7 @@ int main(int argc, char* argv[])
 					disable_original_storage = !disable_original_storage;
 					if (disable_original_storage) {
 						log_message("Fileless mode ENABLED: Original content storage disabled");
-						if (!cache_manager) {
+						if (seed_from_cache && !cache_manager) {
 							try {
 								cache_manager = std::make_unique<PieceCacheManager>(cache_root);
 								log_message("Piece cache initialized");
