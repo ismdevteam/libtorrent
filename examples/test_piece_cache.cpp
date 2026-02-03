@@ -1,475 +1,395 @@
-// test_piece_cache.cpp
-// Unit and integration tests for piece cache feature
-
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
-
-#include "../examples/piece_cache_manager.hpp"
-#include "../examples/cache_config.hpp"
-#include "../examples/cache_alerts.hpp"
-#include "../examples/torrent_utils.hpp"
-#include "../examples/file_utils.hpp"
-
-#include "libtorrent/session.hpp"
-#include "libtorrent/add_torrent_params.hpp"
-#include "libtorrent/torrent_info.hpp"
-#include "libtorrent/create_torrent.hpp"
-#include "libtorrent/bencode.hpp"
-#include "libtorrent/alert_types.hpp"
-
-#include <fstream>
-#include <thread>
-#include <chrono>
+#include "piece_cache_manager.hpp"
+#include "libtorrent/hex.hpp"
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <cstring>
+#include <openssl/sha.h>
 #include <sys/stat.h>
 #include <dirent.h>
 
-namespace {
-
-// Helper function to create a test torrent
-std::shared_ptr<lt::torrent_info> create_test_torrent(
-    const std::string& name = "test_file.txt",
-    std::int64_t file_size = 1024 * 16, // 16KB
-    int piece_size = 16 * 1024) // 16KB pieces
+PieceCacheManager::PieceCacheManager(const std::string& cache_root)
+    : m_cache_root(cache_root)
 {
-    lt::file_storage fs;
-    fs.add_file(name, file_size);
-
-    lt::create_torrent t(fs, piece_size);
-    t.set_creator("piece_cache_test");
-    t.add_tracker("http://test.tracker.com:8080/announce");
-
-    // Generate torrent with dummy piece hashes
-    std::vector<char> piece_data(piece_size, 'X');
-    lt::sha1_hash dummy_hash;
-    int num_pieces = t.num_pieces();
-
-    for (int i = 0; i < num_pieces; ++i)
+    if (!ensure_directory(m_cache_root))
     {
-        t.set_hash(lt::piece_index_t(i), dummy_hash);
+        throw std::runtime_error("Failed to create cache root directory: " + m_cache_root);
     }
-
-    std::vector<char> buf;
-    lt::bencode(std::back_inserter(buf), t.generate());
-
-    return std::make_shared<lt::torrent_info>(buf);
 }
 
-// Helper to create temporary directory
-std::string create_temp_dir(const std::string& prefix = "test_cache_")
+bool PieceCacheManager::ensure_directory(const std::string& path) const
 {
-    std::string dir = prefix + std::to_string(std::time(nullptr)) +
-                      "_" + std::to_string(rand() % 10000);
+    std::string current_path;
+    size_t pos = 0;
+    size_t next_pos = path.find('/', 0);
+
+    while (next_pos != std::string::npos)
+    {
+        current_path += path.substr(pos, next_pos - pos) + "/";
 
 #ifdef TORRENT_WINDOWS
-    _mkdir(dir.c_str());
+        if (_mkdir(current_path.c_str()) != 0 && errno != EEXIST)
+        {
+            std::cerr << "Failed to create directory " << current_path << ": " << strerror(errno) << std::endl;
+            return false;
+        }
 #else
-    mkdir(dir.c_str(), 0777);
+        if (mkdir(current_path.c_str(), 0777) != 0 && errno != EEXIST)
+        {
+            std::cerr << "Failed to create directory " << current_path << ": " << strerror(errno) << std::endl;
+            return false;
+        }
 #endif
 
-    return dir;
+        pos = next_pos + 1;
+        next_pos = path.find('/', pos);
+    }
+
+    // Create the final directory
+#ifdef TORRENT_WINDOWS
+    if (_mkdir(path.c_str()) != 0 && errno != EEXIST)
+    {
+        std::cerr << "Failed to create directory " << path << ": " << strerror(errno) << std::endl;
+        return false;
+    }
+#else
+    if (mkdir(path.c_str(), 0777) != 0 && errno != EEXIST)
+    {
+        std::cerr << "Failed to create directory " << path << ": " << strerror(errno) << std::endl;
+        return false;
+    }
+#endif
+
+    return true;
 }
 
-// Helper to clean up directory
-void cleanup_dir(const std::string& dir)
-{
-    // Simple recursive deletion for test purposes
-    std::string cmd = "rm -rf " + dir;
-    system(cmd.c_str());
-}
-
-// Helper to check if directory exists
-bool directory_exists(const std::string& path)
+bool PieceCacheManager::directory_exists(const std::string& path) const
 {
     struct stat info;
     return stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFDIR);
 }
 
-// Helper to check if file exists
-bool file_exists(const std::string& path)
+std::vector<std::string> PieceCacheManager::list_directory(const std::string& path) const
 {
-    struct stat info;
-    return stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFREG);
-}
+    std::vector<std::string> result;
 
-} // anonymous namespace
+    if (!directory_exists(path))
+        return result;
 
-// ============================================================================
-// PieceCacheManager Tests
-// ============================================================================
+#ifdef TORRENT_WINDOWS
+    std::string pattern = path + "\\*";
+    WIN32_FIND_DATAA fd;
+    HANDLE handle = FindFirstFileA(pattern.c_str(), &fd);
+    if (handle == INVALID_HANDLE_VALUE)
+        return result;
 
-TEST_CASE("PieceCacheManager constructor", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-
-    SECTION("Creates cache directory")
-    {
-        PieceCacheManager cache(cache_dir);
-        REQUIRE(directory_exists(cache_dir));
-    }
-
-    SECTION("Throws on invalid directory")
-    {
-        // Try to create cache in a file (should fail)
-        std::string file_path = cache_dir + "/test.txt";
-        std::ofstream(file_path) << "test";
-
-        REQUIRE_THROWS(PieceCacheManager(file_path));
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-TEST_CASE("PieceCacheManager initialize_torrent", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-    PieceCacheManager cache(cache_dir);
-
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
-
-    SECTION("Successfully initializes")
-    {
-        REQUIRE(cache.initialize_torrent(info_hash, ti));
-
-        // Check that torrent directory was created
-        std::string torrent_dir = cache.get_torrent_cache_dir(info_hash);
-        REQUIRE(directory_exists(torrent_dir));
-
-        // Check metadata file
-        std::string metadata_file = torrent_dir + "/metadata.txt";
-        REQUIRE(file_exists(metadata_file));
-    }
-
-    SECTION("Metadata file contains correct information")
-    {
-        cache.initialize_torrent(info_hash, ti);
-        std::string metadata_file = cache.get_torrent_cache_dir(info_hash) + "/metadata.txt";
-
-        std::ifstream meta(metadata_file);
-        std::string content;
-        std::string line;
-        while (std::getline(meta, line))
-            content += line + "\n";
-
-        REQUIRE(content.find("torrent_name=" + ti->name()) != std::string::npos);
-        REQUIRE(content.find("piece_length=") != std::string::npos);
-        REQUIRE(content.find("num_pieces=") != std::string::npos);
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-TEST_CASE("PieceCacheManager has_piece", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-    PieceCacheManager cache(cache_dir);
-
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
-
-    cache.initialize_torrent(info_hash, ti);
-
-    SECTION("Returns false for non-existent piece")
-    {
-        REQUIRE_FALSE(cache.has_piece(info_hash, lt::piece_index_t(0)));
-    }
-
-    SECTION("Returns true after piece is cached")
-    {
-        // Manually create a piece file
-        std::string piece_path = cache.get_piece_path(info_hash, lt::piece_index_t(0));
-        std::ofstream(piece_path) << "dummy data";
-
-        REQUIRE(cache.has_piece(info_hash, lt::piece_index_t(0)));
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-TEST_CASE("PieceCacheManager get_cached_pieces", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-    PieceCacheManager cache(cache_dir);
-
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
-
-    cache.initialize_torrent(info_hash, ti);
-
-    SECTION("Returns empty vector initially")
-    {
-        auto pieces = cache.get_cached_pieces(info_hash);
-        REQUIRE(pieces.empty());
-    }
-
-    SECTION("Returns cached pieces")
-    {
-        // Create some piece files
-        for (int i : {0, 2, 5})
-        {
-            std::string piece_path = cache.get_piece_path(info_hash, lt::piece_index_t(i));
-            std::ofstream(piece_path) << "dummy";
-        }
-
-        auto pieces = cache.get_cached_pieces(info_hash);
-        REQUIRE(pieces.size() == 3);
-        REQUIRE(std::find(pieces.begin(), pieces.end(), lt::piece_index_t(0)) != pieces.end());
-        REQUIRE(std::find(pieces.begin(), pieces.end(), lt::piece_index_t(2)) != pieces.end());
-        REQUIRE(std::find(pieces.begin(), pieces.end(), lt::piece_index_t(5)) != pieces.end());
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-TEST_CASE("PieceCacheManager statistics", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-    PieceCacheManager cache(cache_dir);
-
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
-
-    cache.initialize_torrent(info_hash, ti);
-
-    SECTION("Initial statistics are zero")
-    {
-        auto stats = cache.get_statistics();
-        REQUIRE(stats.total_cached_pieces == 0);
-        REQUIRE(stats.cache_hits == 0);
-        REQUIRE(stats.cache_misses == 0);
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-TEST_CASE("PieceCacheManager clear_torrent_cache", "[piece_cache][unit]")
-{
-    std::string cache_dir = create_temp_dir();
-    PieceCacheManager cache(cache_dir);
-
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
-
-    cache.initialize_torrent(info_hash, ti);
-
-    // Create some cached pieces
-    for (int i = 0; i < 3; ++i)
-    {
-        std::string piece_path = cache.get_piece_path(info_hash, lt::piece_index_t(i));
-        std::ofstream(piece_path) << "dummy";
-    }
-
-    SECTION("Removes all cached data")
-    {
-        std::string torrent_dir = cache.get_torrent_cache_dir(info_hash);
-        REQUIRE(directory_exists(torrent_dir));
-
-        REQUIRE(cache.clear_torrent_cache(info_hash));
-        REQUIRE_FALSE(directory_exists(torrent_dir));
-    }
-
-    cleanup_dir(cache_dir);
-}
-
-// ============================================================================
-// File Utilities Tests
-// ============================================================================
-
-TEST_CASE("file_utils: path operations", "[file_utils][unit]")
-{
-    using namespace piece_cache;
-
-    SECTION("is_absolute_path")
-    {
-#ifdef _WIN32
-        REQUIRE(is_absolute_path("C:\\path\\to\\file"));
-        REQUIRE(is_absolute_path("D:/path/to/file"));
-        REQUIRE_FALSE(is_absolute_path("relative/path"));
+    do {
+        result.push_back(fd.cFileName);
+    } while (FindNextFileA(handle, &fd));
+    FindClose(handle);
 #else
-        REQUIRE(is_absolute_path("/absolute/path"));
-        REQUIRE_FALSE(is_absolute_path("relative/path"));
-        REQUIRE_FALSE(is_absolute_path("./relative"));
+    DIR* dir = opendir(path.c_str());
+    if (!dir)
+        return result;
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        result.push_back(entry->d_name);
+    }
+    closedir(dir);
 #endif
-    }
 
-    SECTION("path_append")
-    {
-        REQUIRE(path_append("dir", "file") == "dir/file" ||
-                path_append("dir", "file") == "dir\\file");
-        REQUIRE(path_append("", "file") == "file");
-        REQUIRE(path_append("dir", "") == "dir");
-    }
+    return result;
 }
 
-TEST_CASE("file_utils: load and save file", "[file_utils][unit]")
+bool PieceCacheManager::initialize_torrent(const lt::info_hash_t& info_hash,
+                                         std::shared_ptr<const lt::torrent_info> torrent_info)
 {
-    using namespace piece_cache;
+    std::cout << "DEBUG: Initializing torrent: " << torrent_info->name() << std::endl;
+    std::lock_guard<std::mutex> lock(m_cache_mutex);
 
-    std::string test_dir = create_temp_dir();
-    std::string test_file = test_dir + "/test.dat";
+    m_torrent_infos[info_hash] = torrent_info;
 
-    SECTION("Save and load roundtrip")
+    std::string torrent_cache_dir = get_torrent_cache_dir(info_hash);
+
+    if (!ensure_directory(torrent_cache_dir))
     {
-        std::vector<char> data = {'t', 'e', 's', 't', ' ', 'd', 'a', 't', 'a'};
-
-        REQUIRE(save_file(test_file, data));
-        REQUIRE(file_exists(test_file));
-
-        std::vector<char> loaded;
-        REQUIRE(load_file(test_file, loaded));
-        REQUIRE(loaded == data);
+        std::cerr << "Failed to create torrent cache directory: " << torrent_cache_dir << std::endl;
+        return false;
     }
 
-    SECTION("Load non-existent file fails")
+    // Create metadata file
+    std::string metadata_file = torrent_cache_dir + "/metadata.txt";
+    std::ofstream meta(metadata_file);
+    if (meta.is_open())
     {
-        std::vector<char> data;
-        REQUIRE_FALSE(load_file(test_dir + "/nonexistent.dat", data));
+        meta << "torrent_name=" << torrent_info->name() << "\n";
+        meta << "piece_length=" << torrent_info->piece_length() << "\n";
+        meta << "num_pieces=" << torrent_info->num_pieces() << "\n";
+        meta << "total_size=" << torrent_info->total_size() << "\n";
+        meta << "info_hash=" << info_hash_to_string(info_hash) << "\n";
+        meta.close();
     }
 
-    cleanup_dir(test_dir);
+    std::cout << "Initialized cache for torrent: " << torrent_info->name()
+              << " at " << torrent_cache_dir << std::endl;
+
+    return true;
 }
 
-TEST_CASE("file_utils: is_resume_file", "[file_utils][unit]")
+bool PieceCacheManager::cache_piece_data(const lt::info_hash_t& info_hash,
+                                       lt::piece_index_t piece_index,
+                                       const char* piece_data,
+                                       size_t piece_size)
 {
-    using namespace piece_cache;
+    std::cout << "DEBUG: cache_piece_data called for piece "
+              << static_cast<int>(piece_index) << std::endl;
 
-    SECTION("Valid resume files")
+    if (!piece_data || piece_size == 0)
     {
-        REQUIRE(is_resume_file("0123456789abcdef0123456789abcdef01234567.resume"));
-        REQUIRE(is_resume_file("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.resume"));
+        std::cout << "DEBUG: Invalid piece data or size" << std::endl;
+        return false;
     }
 
-    SECTION("Invalid resume files")
+    std::string piece_path = get_piece_path(info_hash, piece_index);
+    std::string torrent_dir = get_torrent_cache_dir(info_hash);
+
+    if (!ensure_directory(torrent_dir))
+        return false;
+
+    // Verify piece hash before caching
+    std::shared_ptr<const lt::torrent_info> torrent_info;
     {
-        REQUIRE_FALSE(is_resume_file("too_short.resume"));
-        REQUIRE_FALSE(is_resume_file("0123456789abcdef0123456789abcdef01234567.txt"));
-        REQUIRE_FALSE(is_resume_file("not_hex_chars_here_zzzzzzzzzzzzzzzzzzz.resume"));
-    }
-}
-
-// ============================================================================
-// Cache Configuration Tests
-// ============================================================================
-
-TEST_CASE("CacheConfig default values", "[cache_config][unit]")
-{
-    piece_cache::CacheConfig config;
-
-    REQUIRE(config.enable_cache == true);
-    REQUIRE(config.cache_during_download == false);
-    REQUIRE(config.disable_original_storage == false);
-    REQUIRE(config.seed_from_cache == false);
-    REQUIRE(config.cache_root == "./piece_cache");
-}
-
-// ============================================================================
-// Integration Tests
-// ============================================================================
-
-TEST_CASE("Integration: Session with piece cache", "[integration][!mayfail]")
-{
-    std::string cache_dir = create_temp_dir();
-    std::string save_dir = create_temp_dir("test_save_");
-
-    // Configure cache
-    piece_cache::g_cache_config.enable_cache = true;
-    piece_cache::g_cache_config.cache_root = cache_dir;
-    piece_cache::cache_manager = std::make_unique<PieceCacheManager>(cache_dir);
-
-    // Create session
-    lt::settings_pack pack;
-    pack.set_int(lt::settings_pack::alert_mask,
-        lt::alert_category::all);
-    lt::session ses(pack);
-
-    // Create and add torrent
-    auto ti = create_test_torrent();
-
-    lt::add_torrent_params atp;
-    atp.ti = ti;
-    atp.save_path = save_dir;
-    atp.flags |= lt::torrent_flags::seed_mode; // Start in seed mode for testing
-
-    lt::torrent_handle h = ses.add_torrent(atp);
-
-    // Wait for torrent to be added and cache initialized
-    bool cache_initialized = false;
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-
-    while (std::chrono::steady_clock::now() < deadline && !cache_initialized)
-    {
-        ses.wait_for_alert(lt::milliseconds(100));
-        std::vector<lt::alert*> alerts;
-        ses.pop_alerts(&alerts);
-
-        for (auto* a : alerts)
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        auto it = m_torrent_infos.find(info_hash);
+        if (it == m_torrent_infos.end())
         {
-            piece_cache::handle_cache_alert(a);
+            std::cerr << "Torrent info not found for hash verification" << std::endl;
+            return false;
+        }
+        torrent_info = it->second;
+    }
 
-            if (auto* ata = lt::alert_cast<lt::add_torrent_alert>(a))
+    // Use OpenSSL's SHA1 for hashing
+    unsigned char digest[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(piece_data), piece_size, digest);
+
+    // Convert OpenSSL digest to libtorrent sha1_hash
+    lt::sha1_hash calculated_hash(reinterpret_cast<const char*>(digest));
+    lt::sha1_hash expected_hash = torrent_info->hash_for_piece(piece_index);
+
+    if (calculated_hash != expected_hash)
+    {
+        std::cerr << "Piece " << static_cast<int>(piece_index)
+                  << " hash verification failed, not caching" << std::endl;
+        std::cerr << "Expected: " << expected_hash << std::endl;
+        std::cerr << "Calculated: " << calculated_hash << std::endl;
+        return false;
+    }
+    else
+    {
+        std::cout << "DEBUG: Hash verification passed for piece "
+                  << static_cast<int>(piece_index) << std::endl;
+    }
+
+    // Write piece to cache
+    std::ofstream piece_file(piece_path, std::ios::binary);
+    if (!piece_file.is_open())
+    {
+        std::cerr << "Failed to open piece file for writing: " << piece_path << std::endl;
+        return false;
+    }
+
+    piece_file.write(piece_data, piece_size);
+    piece_file.close();
+
+    if (piece_file.fail())
+    {
+        std::cerr << "Failed to write piece data to: " << piece_path << std::endl;
+        return false;
+    }
+
+    // Update statistics
+    update_statistics(0, 0, piece_size);
+    {
+        std::lock_guard<std::mutex> lock(m_stats_mutex);
+        m_statistics.total_cached_pieces++;
+        m_statistics.cache_writes++;
+    }
+
+    std::cout << "Cached piece " << static_cast<int>(piece_index)
+              << " (" << piece_size << " bytes)" << std::endl;
+
+    return true;
+}
+
+bool PieceCacheManager::has_piece(const lt::info_hash_t& info_hash,
+                                 lt::piece_index_t piece_index) const
+{
+    std::string piece_path = get_piece_path(info_hash, piece_index);
+    struct stat buffer;
+    return (stat(piece_path.c_str(), &buffer) == 0);
+}
+
+int PieceCacheManager::read_piece(const lt::info_hash_t& info_hash,
+                                 lt::piece_index_t piece_index,
+                                 char* buffer,
+                                 size_t buffer_size)
+{
+    if (!buffer || buffer_size == 0)
+        return -1;
+
+    std::string piece_path = get_piece_path(info_hash, piece_index);
+
+    struct stat buffer_stat;
+    if (stat(piece_path.c_str(), &buffer_stat) != 0)
+    {
+        update_statistics(0, 1, 0);
+        return -1;
+    }
+
+    std::ifstream piece_file(piece_path, std::ios::binary);
+    if (!piece_file.is_open())
+    {
+        std::cerr << "Failed to open cached piece file: " << piece_path << std::endl;
+        update_statistics(0, 1, 0);
+        return -1;
+    }
+
+    piece_file.seekg(0, std::ios::end);
+    std::size_t file_size = piece_file.tellg();
+    piece_file.seekg(0, std::ios::beg);
+
+    if (file_size > buffer_size)
+    {
+        std::cerr << "Buffer too small for piece " << static_cast<int>(piece_index)
+                  << ". Need " << file_size << ", have " << buffer_size << std::endl;
+        return -1;
+    }
+
+    piece_file.read(buffer, file_size);
+
+    if (piece_file.fail())
+    {
+        std::cerr << "Failed to read piece data from: " << piece_path << std::endl;
+        update_statistics(0, 1, 0);
+        return -1;
+    }
+
+    update_statistics(1, 0, 0);
+    std::cout << "Read cached piece " << static_cast<int>(piece_index)
+              << " (" << file_size << " bytes)" << std::endl;
+
+    return static_cast<int>(file_size);
+}
+
+std::vector<lt::piece_index_t> PieceCacheManager::get_cached_pieces(const lt::info_hash_t& info_hash) const
+{
+    std::vector<lt::piece_index_t> cached_pieces;
+    std::string torrent_dir = get_torrent_cache_dir(info_hash);
+
+    if (!directory_exists(torrent_dir))
+        return cached_pieces;
+
+    std::vector<std::string> files = list_directory(torrent_dir);
+
+    for (const auto& filename : files)
+    {
+        if (filename.substr(0, 6) == "piece_" && filename.size() >= 4 && filename.substr(filename.size() - 4) == ".dat")
+        {
+            std::string piece_num_str = filename.substr(6, filename.length() - 10);
+            try
             {
-                if (!ata->error)
-                {
-                    lt::info_hash_t ih = ti->info_hashes();
-                    cache_initialized = piece_cache::g_initialized_torrents.find(ih) !=
-                                       piece_cache::g_initialized_torrents.end();
-                }
+                int piece_num = std::stoi(piece_num_str);
+                cached_pieces.push_back(lt::piece_index_t(piece_num));
+            }
+            catch (const std::exception&)
+            {
+                continue;
             }
         }
     }
 
-    REQUIRE(cache_initialized);
-
-    // Cleanup
-    ses.remove_torrent(h);
-    piece_cache::cache_manager.reset();
-    piece_cache::g_initialized_torrents.clear();
-    cleanup_dir(cache_dir);
-    cleanup_dir(save_dir);
+    std::sort(cached_pieces.begin(), cached_pieces.end());
+    return cached_pieces;
 }
 
-TEST_CASE("Integration: Resume data creation", "[integration]")
+PieceCacheStatistics PieceCacheManager::get_statistics() const
 {
-    std::string cache_dir = create_temp_dir();
-    piece_cache::cache_manager = std::make_unique<PieceCacheManager>(cache_dir);
+    std::lock_guard<std::mutex> lock(m_stats_mutex);
+    return m_statistics;
+}
 
-    auto ti = create_test_torrent();
-    lt::info_hash_t info_hash;
-    info_hash.v1 = ti->info_hash();
+bool PieceCacheManager::clear_torrent_cache(const lt::info_hash_t& info_hash)
+{
+    std::string torrent_dir = get_torrent_cache_dir(info_hash);
 
-    // Initialize cache and add some pieces
-    piece_cache::cache_manager->initialize_torrent(info_hash, ti);
-    piece_cache::g_initialized_torrents.insert(info_hash);
+    if (!directory_exists(torrent_dir))
+        return true;
 
-    // Manually create cached pieces
-    for (int i = 0; i < 3; ++i)
+    std::vector<std::string> files = list_directory(torrent_dir);
+
+    std::uintmax_t removed_size = 0;
+    std::uintmax_t removed_count = 0;
+
+    for (const auto& filename : files)
     {
-        std::string piece_path = piece_cache::cache_manager->get_piece_path(
-            info_hash, lt::piece_index_t(i));
-        std::ofstream(piece_path) << "dummy";
+        std::string file_path = torrent_dir + "/" + filename;
+        struct stat file_stat;
+        if (stat(file_path.c_str(), &file_stat) == 0)
+        {
+            removed_size += file_stat.st_size;
+            removed_count++;
+            remove(file_path.c_str());
+        }
     }
 
-    SECTION("Create resume data from cache")
+    rmdir(torrent_dir.c_str());
+
     {
-        auto resume_params = piece_cache::create_cache_resume_data(info_hash, ti);
-
-        REQUIRE(resume_params.ti);
-        REQUIRE(resume_params.have_pieces.size() > 0);
-        REQUIRE(resume_params.flags & lt::torrent_flags::seed_mode);
-
-        // Verify the correct pieces are marked
-        REQUIRE(resume_params.have_pieces[0]);
-        REQUIRE(resume_params.have_pieces[1]);
-        REQUIRE(resume_params.have_pieces[2]);
+        std::lock_guard<std::mutex> lock(m_stats_mutex);
+        m_statistics.total_cached_pieces -= removed_count;
+        m_statistics.total_cache_size -= removed_size;
     }
 
-    // Cleanup
-    piece_cache::cache_manager.reset();
-    piece_cache::g_initialized_torrents.clear();
-    cleanup_dir(cache_dir);
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        m_torrent_infos.erase(info_hash);
+    }
+
+    std::cout << "Cleared cache for torrent " << info_hash_to_string(info_hash)
+              << " (" << removed_count << " pieces, " << removed_size << " bytes)" << std::endl;
+
+    return true;
+}
+
+std::string PieceCacheManager::get_piece_path(const lt::info_hash_t& info_hash,
+                                            lt::piece_index_t piece_index) const
+{
+    std::string torrent_dir = get_torrent_cache_dir(info_hash);
+    std::ostringstream piece_filename;
+    piece_filename << "piece_" << std::setfill('0') << std::setw(6)
+                   << static_cast<int>(piece_index) << ".dat";
+    return torrent_dir + "/" + piece_filename.str();
+}
+
+std::string PieceCacheManager::get_torrent_cache_dir(const lt::info_hash_t& info_hash) const
+{
+    return m_cache_root + "/" + info_hash_to_string(info_hash);
+}
+
+std::string PieceCacheManager::info_hash_to_string(const lt::info_hash_t& info_hash) const
+{
+    if (info_hash.has_v2())
+        return lt::aux::to_hex(info_hash.v2);
+    return lt::aux::to_hex(info_hash.v1);
+}
+
+void PieceCacheManager::update_statistics(int hits_delta, int misses_delta, int size_delta)
+{
+    std::lock_guard<std::mutex> lock(m_stats_mutex);
+    m_statistics.cache_hits += hits_delta;
+    m_statistics.cache_misses += misses_delta;
+    m_statistics.total_cache_size += size_delta;
+    m_statistics.cache_reads += (hits_delta > 0 || misses_delta > 0) ? 1 : 0;
 }

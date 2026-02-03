@@ -39,8 +39,8 @@ The implementation follows a modular design:
 │   (UI, event loop, CLI parsing)     │
 └──────────────┬──────────────────────┘
                │
-       ┌───────┴────────┬─────────────┬──────────────┐
-       │                │             │              │
+       ┌───────┴────────┬────────────┬─────────────┐
+       │                │            │             │
 ┌──────▼──────┐  ┌──────▼──────┐ ┌───▼──────┐  ┌───▼──────┐
 │cache_alerts │  │torrent_utils│ │file_utils│  │cache_    │
 │  (Alert     │  │ (Torrent    │ │ (File    │  │config    │
@@ -48,8 +48,8 @@ The implementation follows a modular design:
 └──────┬──────┘  └──────┬──────┘ └────┬─────┘  └────┬─────┘
        │                │             │             │
        └────────────────┴─────────────┴─────────────┘
-                         │
-                ┌────────▼───────────┐
+                        │
+                ┌───────▼────────────┐
                 │piece_cache_manager │  Core cache logic
                 │  (Piece storage,   │
                 │  hash verification)│

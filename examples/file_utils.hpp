@@ -74,4 +74,3 @@ void scan_dir(std::string const& dir_path, libtorrent::session& ses);
 bool is_resume_file(std::string const& s);
 
 } // namespace piece_cache
-

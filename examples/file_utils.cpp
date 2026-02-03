@@ -40,10 +40,12 @@ bool is_absolute_path(std::string const& f)
     if (f.empty()) return false;
 #if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
     int i = 0;
+    // match the xx:\ or xx:/ form
     while (f[i] && strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVXYZ", f[i])) ++i;
     if (i < int(f.size()-1) && f[i] == ':' && (f[i+1] == '\\' || f[i+1] == '/'))
         return true;
 
+    // match the \\ form
     if (int(f.size()) >= 2 && f[0] == '\\' && f[1] == '\\')
         return true;
     return false;
