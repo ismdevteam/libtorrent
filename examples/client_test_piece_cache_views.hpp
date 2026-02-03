@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <libtorrent/peer_info.hpp>
-#include <libtorrent/partial_piece_info.hpp>
+//#include <libtorrent/partial_piece_info.hpp>
 
 struct client_state_t;
 
