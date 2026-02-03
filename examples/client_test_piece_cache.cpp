@@ -218,14 +218,6 @@ std::string to_hex(lt::sha1_hash const& s)
 	return ret.str();
 }
 
-// ADDED: Logging function
-void log_message(const std::string& message) {
-    std::cout << message << std::endl;
-    if (g_log_file) {
-        std::fprintf(g_log_file, "[%s] %s\n", timestamp(), message.c_str());
-        fflush(g_log_file);
-    }
-}
 
 bool load_file(std::string const& filename, std::vector<char>& v
 	, int limit = 8000000)
@@ -307,6 +299,17 @@ std::string print_endpoint(lt::tcp::endpoint const& ep)
 using lt::torrent_status;
 
 FILE* g_log_file = nullptr;
+
+// ADDED: Helper function for logging to both console and file
+void log_message(const std::string& message)
+{
+    std::cout << message << std::endl;
+    if (g_log_file) {
+        //std::fprintf(g_log_file, "[%s] %s\n", timestamp(), message.c_str());
+        std::fprintf(g_log_file, "[LOG] %s\n", message.c_str());
+        fflush(g_log_file);
+    }
+}
 
 int peer_index(lt::tcp::endpoint addr, std::vector<lt::peer_info> const& peers)
 {
