@@ -1,6 +1,8 @@
 #include "client_test_piece_cache_alerts.hpp"
+#include "client_test_piece_cache_globals.hpp"
 #include "client_test_piece_cache_utils.hpp"
 #include "piece_cache_manager.hpp"
+#include <iostream>
 
 bool handle_alert(client_state_t& client_state, lt::alert* a) {
     using namespace lt;

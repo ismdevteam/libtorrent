@@ -1,4 +1,5 @@
 #include "client_test_piece_cache_views.hpp"
+#include "client_test_piece_cache_globals.hpp"
 #include "client_test_piece_cache_utils.hpp"
 
 int print_peer_info(std::string& out, std::vector<lt::peer_info> const& peers, int max_lines) {
@@ -116,15 +117,15 @@ int print_peer_info(std::string& out, std::vector<lt::peer_info> const& peers, i
             if (i->download_queue_length > 0)
                 std::snprintf(req_timeout, sizeof(req_timeout), "%d", i->request_timeout);
 
-            std::snprintf(str, sizeof(str), "%8d %4d %7s %6d "
-                , int(total_seconds(i->last_active))
+            std::snprintf(str, sizeof(str), "%8d %4d %7s %6d ",
+                int(total_seconds(i->last_active))
                 , int(total_seconds(i->last_request))
                 , req_timeout
                 , int(total_seconds(i->download_queue_time)));
             out += str;
         }
-        std::snprintf(str, sizeof(str), "%s|%s %5d "
-            , add_suffix(i->pending_disk_bytes).c_str()
+        std::snprintf(str, sizeof(str), "%s|%s %5d ",
+            add_suffix(i->pending_disk_bytes).c_str()
             , add_suffix(i->pending_disk_read_bytes).c_str()
             , i->rtt);
         out += str;

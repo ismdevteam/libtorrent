@@ -1,4 +1,5 @@
 #include "client_test_piece_cache_session.hpp"
+#include "client_test_piece_cache_globals.hpp"
 #include "client_test_piece_cache_utils.hpp"
 #include "piece_cache_manager.hpp"
 

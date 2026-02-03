@@ -48,6 +48,7 @@
 #include "client_test_piece_cache_session.hpp"
 #include "client_test_piece_cache_torrent.hpp"
 #include "client_test_piece_cache_views.hpp"
+#include "client_test_piece_cache_globals.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -377,6 +378,17 @@ int main(int argc, char* argv[]) {
 
             auto& peers = client_state.peers;
             if (print_peers && !peers.empty()) {
+                using lt::peer_info;
+                std::sort(peers.begin(), peers.end(),
+                    [](peer_info const& lhs, peer_info const& rhs) {
+                        bool const l = bool(lhs.flags & peer_info::connecting);
+                        bool const r = bool(rhs.flags & peer_info::connecting);
+                        if (l != r) return l < r;
+                        bool const lh = bool(lhs.flags & peer_info::handshake);
+                        bool const rh = bool(rhs.flags & peer_info::handshake);
+                        if (lh != rh) return lh < rh;
+                        return lhs.pid < rhs.pid;
+                    });
                 pos += print_peer_info(out, peers, terminal_height - pos - 2);
                 if (print_peers_legend) {
                     pos += print_peer_legend(out, terminal_height - pos - 2);

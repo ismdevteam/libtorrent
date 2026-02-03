@@ -4,6 +4,7 @@
 #include <vector>
 #include <libtorrent/session.hpp>
 #include <libtorrent/error_code.hpp>
+#include <libtorrent/string_view.hpp>
 
 bool load_file(std::string const& filename, std::vector<char>& v, int limit = 8000000);
 bool is_absolute_path(std::string const& f);

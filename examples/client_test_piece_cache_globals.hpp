@@ -4,6 +4,8 @@
 #include <libtorrent/info_hash.hpp>
 #include <set>
 #include <memory>
+#include <vector>
+#include <iostream>
 
 extern bool print_trackers;
 extern bool print_peers;

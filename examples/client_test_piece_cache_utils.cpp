@@ -1,7 +1,9 @@
 #include "client_test_piece_cache_utils.hpp"
+#include "client_test_piece_cache_globals.hpp"
 #include <fstream>
 #include <cstring>
 #include <sys/stat.h>
+#include <dirent.h>
 
 bool load_file(std::string const& filename, std::vector<char>& v, int limit) {
     std::fstream f(filename, std::ios_base::in | std::ios_base::binary);
