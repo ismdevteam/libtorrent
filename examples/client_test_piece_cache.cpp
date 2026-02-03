@@ -254,32 +254,57 @@ void create_cid_structure(const std::string& dummy_base,
     mkdir(torrent_base.c_str(), 0777);
 #endif
     
-    // Create CID for torrent root
-    std::string torrent_cid = generate_cid_hash(ti.name());
-    std::string torrent_cid_dir = torrent_base + "/" + torrent_cid;
-    
+    // For multi-file torrents, we need to handle directory structure
+    if (ti.num_files() > 1) {
+        // Create CID for the torrent root directory
+        std::string torrent_cid = generate_cid_hash(ti.name());
+        std::string torrent_cid_dir = torrent_base + "/" + torrent_cid;
+        
 #ifdef TORRENT_WINDOWS
-    _mkdir(torrent_cid_dir.c_str());
+        _mkdir(torrent_cid_dir.c_str());
 #else
-    mkdir(torrent_cid_dir.c_str(), 0777);
+        mkdir(torrent_cid_dir.c_str(), 0777);
 #endif
-    
-    // For each file, create a CID entry
-    if (ti.num_files() > 0) {
+        
+        // For each file in the torrent
         for (lt::file_index_t i(0); i < ti.num_files(); ++i) {
-            std::string file_name = ti.files().file_name(i).to_string();
-            std::string file_cid = generate_cid_hash(file_name);
+            // Get the full file path within the torrent
+            lt::string_view file_path_sv = ti.files().file_path(i);
+            std::string file_path(file_path_sv.data(), file_path_sv.size());
             
-            // Create dummy file with CID name
+            // Generate CID for the file
+            std::string file_cid = generate_cid_hash(file_path);
+            
+            // Create the file with CID name
             std::string cid_file_path = torrent_cid_dir + "/" + file_cid;
+            
+            // Create any necessary parent directories
+            std::string parent_dir = cid_file_path.substr(0, cid_file_path.find_last_of('/'));
+#ifdef TORRENT_WINDOWS
+            _mkdir(parent_dir.c_str());
+#else
+            mkdir(parent_dir.c_str(), 0777);
+#endif
             
             // Create empty file
             std::ofstream dummy_file(cid_file_path);
             if (dummy_file.is_open()) {
                 dummy_file.close();
-                // Use printf since log_message might not be in scope
-                std::printf("Created CID file: %s for %s\n", cid_file_path.c_str(), file_name.c_str());
+                std::printf("Created CID file: %s for %s\n", cid_file_path.c_str(), file_path.c_str());
             }
+        }
+    } else if (ti.num_files() == 1) {
+        // Single file torrent - create CID for the file directly
+        std::string file_name = ti.files().file_name(file_index_t(0)).to_string();
+        std::string file_cid = generate_cid_hash(file_name);
+        
+        // Create file with CID name directly in torrent base
+        std::string cid_file_path = torrent_base + "/" + file_cid;
+        
+        std::ofstream dummy_file(cid_file_path);
+        if (dummy_file.is_open()) {
+            dummy_file.close();
+            std::printf("Created single CID file: %s for %s\n", cid_file_path.c_str(), file_name.c_str());
         }
     }
 }
@@ -302,44 +327,68 @@ void migrate_to_cid_structure(const lt::torrent_info& ti)
 #endif
     
     if (ret == 0 && (st.st_mode & S_IFDIR)) {
-        // Old structure exists, rename to CID structure
-        std::string torrent_cid = generate_cid_hash(ti.name());
-        std::string new_torrent_path = old_torrent_path + "/" + torrent_cid;
-        
-        // Rename directory
-        if (rename(old_torrent_path.c_str(), new_torrent_path.c_str()) == 0) {
-            std::printf("Migrated old structure to CID: %s\n", new_torrent_path.c_str());
+        // For multi-file torrents
+        if (ti.num_files() > 1) {
+            // Create CID directory for torrent
+            std::string torrent_cid = generate_cid_hash(ti.name());
+            std::string new_torrent_path = old_torrent_path + "/" + torrent_cid;
             
-            // Now rename files inside (if they exist)
-            for (lt::file_index_t i(0); i < ti.num_files(); ++i) {
-                std::string old_file_name = ti.files().file_name(i).to_string();
-                std::string file_cid = generate_cid_hash(old_file_name);
+            // First, rename the old directory to CID directory
+            if (rename(old_torrent_path.c_str(), new_torrent_path.c_str()) == 0) {
+                std::printf("Migrated directory to CID: %s\n", new_torrent_path.c_str());
                 
-                std::string old_full_path = new_torrent_path + "/" + old_file_name;
-                std::string new_full_path = new_torrent_path + "/" + file_cid;
-                
-                // Check if file exists before renaming
+                // Now process files inside the directory
+                for (lt::file_index_t i(0); i < ti.num_files(); ++i) {
+                    // Get the full file path
+                    lt::string_view full_file_path_sv = ti.files().file_path(i);
+                    std::string full_file_path(full_file_path_sv.data(), full_file_path_sv.size());
+                    
+                    // Extract just the filename (last component)
+                    size_t last_slash = full_file_path.find_last_of('/');
+                    std::string old_file_name = (last_slash != std::string::npos) ? 
+                        full_file_path.substr(last_slash + 1) : full_file_path;
+                    
+                    // Generate CID for the full file path
+                    std::string file_cid = generate_cid_hash(full_file_path);
+                    
+                    // Build old and new paths
+                    std::string old_full_path = new_torrent_path + "/" + old_file_name;
+                    std::string new_full_path = new_torrent_path + "/" + file_cid;
+                    
+                    // Check if file exists before renaming
 #ifdef TORRENT_WINDOWS
-                ret = _stat(old_full_path.c_str(), &st);
+                    ret = _stat(old_full_path.c_str(), &st);
 #else
-                ret = stat(old_full_path.c_str(), &st);
+                    ret = stat(old_full_path.c_str(), &st);
 #endif
-                if (ret == 0 && (st.st_mode & S_IFREG)) {
-                    if (rename(old_full_path.c_str(), new_full_path.c_str()) == 0) {
-                        std::printf("  Renamed %s to %s\n", old_file_name.c_str(), file_cid.c_str());
+                    if (ret == 0 && (st.st_mode & S_IFREG)) {
+                        if (rename(old_full_path.c_str(), new_full_path.c_str()) == 0) {
+                            std::printf("  Renamed %s to %s\n", old_file_name.c_str(), file_cid.c_str());
+                        }
                     }
+                }
+            }
+        } else if (ti.num_files() == 1) {
+            // Single file torrent - just rename the file
+            lt::string_view file_name_sv = ti.files().file_name(file_index_t(0));
+            std::string file_name(file_name_sv.data(), file_name_sv.size());
+            std::string file_cid = generate_cid_hash(file_name);
+            
+            std::string old_file_path = old_torrent_path + "/" + file_name;
+            std::string new_file_path = old_torrent_path + "/" + file_cid;
+            
+#ifdef TORRENT_WINDOWS
+            ret = _stat(old_file_path.c_str(), &st);
+#else
+            ret = stat(old_file_path.c_str(), &st);
+#endif
+            if (ret == 0 && (st.st_mode & S_IFREG)) {
+                if (rename(old_file_path.c_str(), new_file_path.c_str()) == 0) {
+                    std::printf("Renamed single file: %s to %s\n", file_name.c_str(), file_cid.c_str());
                 }
             }
         }
     }
-}
-
-// ADDED: Function to map original path to CID path
-std::string map_to_cid_path(const std::string& original_path, const std::string& dummy_base)
-{
-    // Generate CID for the entire path
-    std::string cid = generate_cid_hash(original_path);
-    return dummy_base + "/" + cid;
 }
 
 bool load_file(std::string const& filename, std::vector<char>& v
@@ -990,11 +1039,17 @@ void set_torrent_params(lt::add_torrent_params& p)
                 // Create CID-based directory structure
                 create_cid_structure(dummy_base, *p.ti, hash_str);
                 
-                // Use the CID-based path for save_path
-                std::string torrent_cid = generate_cid_hash(p.ti->name());
-                p.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
-                
-                log_message("Seed-from-cache: Using CID-based dummy path: " + p.save_path);
+                // Set save_path based on whether it's multi-file or single-file
+                if (p.ti->num_files() > 1) {
+                    // Multi-file torrent: use CID directory
+                    std::string torrent_cid = generate_cid_hash(p.ti->name());
+                    p.save_path = dummy_base + "/cache_seed/" + hash_str + "/" + torrent_cid;
+                    log_message("Seed-from-cache (multi-file): Using CID directory: " + p.save_path);
+                } else if (p.ti->num_files() == 1) {
+                    // Single-file torrent: use base directory
+                    p.save_path = dummy_base + "/cache_seed/" + hash_str;
+                    log_message("Seed-from-cache (single-file): Using base directory: " + p.save_path);
+                }
             } else {
                 // Fallback to old behavior if no torrent info
                 p.save_path = dummy_base + "/cache_seed/" + hash_str;
