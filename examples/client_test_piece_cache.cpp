@@ -37,6 +37,19 @@
 #include "libtorrent/disabled_disk_io.hpp"
 #include "libtorrent/load_torrent.hpp"
 
+#include "global_settings.hpp"
+
+// Replace the old declarations with:
+namespace global_settings {
+    std::string save_path(".");
+    int max_connections_per_torrent = 50;
+    int torrent_upload_limit = 0;
+    int torrent_download_limit = 0;
+    bool seed_mode = false;
+    bool share_mode = false;
+    lt::storage_mode_t allocation_mode = lt::storage_mode_sparse;
+}
+
 #include "torrent_view.hpp"
 #include "session_view.hpp"
 #include "print.hpp"
@@ -80,9 +93,9 @@ using lt::make_address_v4;
 using lt::make_address;
 using lt::torrent_status;
 using lt::operation_t;
-using lt::errors;
+//using lt::errors;
 using lt::tcp;
-using lt::error_code;
+//using lt::error_code;
 
 using std::chrono::duration_cast;
 using std::stoi;

@@ -14,26 +14,14 @@
 # EXTERNAL cache entries
 ########################
 
-//No help, variable specified on the command line.
-BOOST_ROOT:UNINITIALIZED=/usr
-
 //build libtorrent as a shared library
-BUILD_SHARED_LIBS:BOOL=OFF
+BUILD_SHARED_LIBS:BOOL=ON
 
 //The directory containing a CMake configuration file for Boost.
 Boost_DIR:PATH=/usr/lib/x86_64-linux-gnu/cmake/Boost-1.83.0
 
 //Path to a file.
 Boost_INCLUDE_DIR:PATH=/usr/include
-
-//No help, variable specified on the command line.
-Boost_NO_SYSTEM_PATHS:UNINITIALIZED=ON
-
-//No help, variable specified on the command line.
-Boost_USE_STATIC_LIBS:UNINITIALIZED=ON
-
-//No help, variable specified on the command line.
-Boost_USE_STATIC_RUNTIME:UNINITIALIZED=ON
 
 //Path to a program.
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
@@ -394,7 +382,7 @@ python-egg-info:BOOL=OFF
 python-install-system-dir:BOOL=OFF
 
 //build libtorrent with static runtime
-static_runtime:BOOL=ON
+static_runtime:BOOL=OFF
 
 //Enables support for piece deadline
 streaming:BOOL=ON

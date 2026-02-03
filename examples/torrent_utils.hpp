@@ -4,6 +4,7 @@
 #include "libtorrent/add_torrent_params.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/info_hash.hpp"
+#include "global_settings.hpp"
 #include <string>
 
 namespace piece_cache {

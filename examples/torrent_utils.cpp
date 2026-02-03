@@ -1,6 +1,7 @@
 #include "torrent_utils.hpp"
 #include "cache_config.hpp"
 #include "cache_alerts.hpp"
+#include "file_utils.hpp"
 #include "libtorrent/load_torrent.hpp"
 #include "libtorrent/magnet_uri.hpp"
 #include "libtorrent/read_resume_data.hpp"
@@ -46,25 +47,16 @@ bool load_file(std::string const& filename, std::vector<char>& v, int limit = 80
     return !f.fail();
 }
 
-// External declarations for global settings
-extern std::string save_path;
-extern int max_connections_per_torrent;
-extern int torrent_upload_limit;
-extern int torrent_download_limit;
-extern bool seed_mode;
-extern bool share_mode;
-extern lt::storage_mode_t allocation_mode;
-
 } // anonymous namespace
 
 namespace piece_cache {
 
 void set_torrent_params(lt::add_torrent_params& p)
 {
-    p.max_connections = max_connections_per_torrent;
+    p.max_connections = global_settings::max_connections_per_torrent;
     p.max_uploads = -1;
-    p.upload_limit = torrent_upload_limit;
-    p.download_limit = torrent_download_limit;
+    p.upload_limit = global_settings::torrent_upload_limit;
+    p.download_limit = global_settings::torrent_download_limit;
 
     // Use disabled disk I/O if -Z or -S flag is set
     if (g_cache_config.disable_original_storage) {
@@ -76,12 +68,12 @@ void set_torrent_params(lt::add_torrent_params& p)
             p.save_path = "/tmp/dummy_save_path";
         }
     } else {
-        p.save_path = save_path;
+        p.save_path = global_settings::save_path;
     }
 
-    if (seed_mode) p.flags |= lt::torrent_flags::seed_mode;
-    if (share_mode) p.flags |= lt::torrent_flags::share_mode;
-    p.storage_mode = allocation_mode;
+    if (global_settings::seed_mode) p.flags |= lt::torrent_flags::seed_mode;
+    if (global_settings::share_mode) p.flags |= lt::torrent_flags::share_mode;
+    p.storage_mode = global_settings::allocation_mode;
 }
 
 std::string resume_file(lt::info_hash_t const& info_hash)
@@ -89,7 +81,7 @@ std::string resume_file(lt::info_hash_t const& info_hash)
     // Use appropriate resume directory based on mode
     std::string const resume_dir = g_cache_config.disable_original_storage ?
         path_append(g_cache_config.cache_root, ".resume") :
-        path_append(save_path, ".resume");
+        path_append(global_settings::save_path, ".resume");
         
     return path_append(resume_dir, to_hex(info_hash.get_best()) + ".resume");
 }
