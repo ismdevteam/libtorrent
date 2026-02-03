@@ -24,7 +24,17 @@ This feature adds fileless torrent operation capability to libtorrent, allowing 
 git clone --recurse-submodules -b piece-cache-feature https://github.com/ismdevteam/libtorrent.git
 cd ./libtorrent
 mkdir build && cd build
+
 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=14 -G Ninja .. -Dbuild_examples=ON
+```
+
+# Or static configuration
+```
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=14 -G Ninja .. -Dbuild_examples=ON -Dstatic_runtime=ON -DBUILD_SHARED_LIBS=OFF -DBOOST_ROOT=/usr -DBoost_NO_SYSTEM_PATHS=ON -Dpython-bindings=OFF -Dpython-egg-info=OFF -DBoost_USE_STATIC_RUNTIME=ON
+```
+# Build
+
+```
 ninja -j$(nproc) client_test_piece_cache
 ```
 
