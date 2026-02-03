@@ -300,13 +300,27 @@ using lt::torrent_status;
 
 FILE* g_log_file = nullptr;
 
+char const* timestamp()
+{
+	time_t t = std::time(nullptr);
+#ifdef TORRENT_WINDOWS
+	std::tm const* timeinfo = localtime(&t);
+#else
+	std::tm buf;
+	std::tm const* timeinfo = localtime_r(&t, &buf);
+#endif
+	static char str[200];
+	std::strftime(str, 200, "%b %d %X", timeinfo);
+	return str;
+}
+
 // ADDED: Helper function for logging to both console and file
 void log_message(const std::string& message)
 {
     std::cout << message << std::endl;
     if (g_log_file) {
-        //std::fprintf(g_log_file, "[%s] %s\n", timestamp(), message.c_str());
-        std::fprintf(g_log_file, "[LOG] %s\n", message.c_str());
+        std::fprintf(g_log_file, "[%s] %s\n", timestamp(), message.c_str());
+        //std::fprintf(g_log_file, "[LOG] %s\n", message.c_str());
         fflush(g_log_file);
     }
 }
@@ -1014,20 +1028,6 @@ void scan_dir(std::string const& dir_path, lt::session& ses)
 			}
 		}
 	}
-}
-
-char const* timestamp()
-{
-	time_t t = std::time(nullptr);
-#ifdef TORRENT_WINDOWS
-	std::tm const* timeinfo = localtime(&t);
-#else
-	std::tm buf;
-	std::tm const* timeinfo = localtime_r(&t, &buf);
-#endif
-	static char str[200];
-	std::strftime(str, 200, "%b %d %X", timeinfo);
-	return str;
 }
 
 void print_alert(lt::alert const* a, std::string& str)
