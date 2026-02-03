@@ -35,24 +35,24 @@ The implementation follows a modular design:
 
 ```
 ┌─────────────────────────────────────┐
-│   client_test_piece_cache.cpp      │  Main application
+│   client_test_piece_cache.cpp       │  Main application
 │   (UI, event loop, CLI parsing)     │
 └──────────────┬──────────────────────┘
                │
        ┌───────┴────────┬─────────────┬──────────────┐
-       │                │              │              │
+       │                │             │              │
 ┌──────▼──────┐  ┌──────▼──────┐ ┌───▼──────┐  ┌───▼──────┐
 │cache_alerts │  │torrent_utils│ │file_utils│  │cache_    │
 │  (Alert     │  │ (Torrent    │ │ (File    │  │config    │
 │  handling)  │  │  operations)│ │  I/O)    │  │(Settings)│
 └──────┬──────┘  └──────┬──────┘ └────┬─────┘  └────┬─────┘
-       │                │              │             │
-       └────────────────┴──────────────┴─────────────┘
+       │                │             │             │
+       └────────────────┴─────────────┴─────────────┘
                          │
                 ┌────────▼───────────┐
                 │piece_cache_manager │  Core cache logic
                 │  (Piece storage,   │
-                │   hash verification)│
+                │  hash verification)│
                 └────────────────────┘
 ```
 
@@ -71,11 +71,11 @@ The implementation follows a modular design:
 git clone --recurse-submodules -b piece-cache-feature https://github.com/ismdevteam/libtorrent.git
 cd ./libtorrent
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -G Ninja .. -Dbuild_examples=ON
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=14 -G Ninja .. -Dbuild_examples=ON
 ninja client_test_piece_cache
 ```
 
-**Note**: Requires C++17 for `std::filesystem` support.
+**Note**: Requires C++14 (changed from C++17).
 
 ### Command Line Options
 - `-Z` - Enable fileless mode (disable original content storage)
@@ -168,7 +168,7 @@ All cached pieces are verified using SHA-1 hash (via OpenSSL) before storage:
 ## Compatibility
 
 - **libtorrent**: 2.0.11+
-- **C++ Standard**: C++17 (required for `std::filesystem`)
+- **C++ Standard**: C++14 (changed from C++17)
 - **Compilers**: GCC 9+, Clang 10+, MSVC 2019+
 - **Platforms**: Linux, macOS, Windows
 - **Dependencies**: OpenSSL (for SHA-1 hashing)
@@ -238,7 +238,7 @@ If you encounter compilation errors, see `COMPILATION_FIXES.md` for solutions to
 
 ### Common Issues
 
-1. **"std::filesystem not found"**: Ensure C++17 is enabled (`-DCMAKE_CXX_STANDARD=17`)
+1. **"std::filesystem not found"**: Ensure C++14 is enabled (`-DCMAKE_CXX_STANDARD=14`)
 2. **"OpenSSL not found"**: Install OpenSSL development packages
 3. **Hash verification failures**: Ensure piece data is not corrupted during download
 
@@ -251,7 +251,7 @@ If you encounter compilation errors, see `COMPILATION_FIXES.md` for solutions to
 
 ## Limitations
 
-- Requires C++17 compiler and standard library
+- Requires C++14 compiler and standard library
 - Cache pieces stored as individual files (not in database)
 - No automatic cache cleanup (manual management required)
 - Resume data stored as plain text files
@@ -296,6 +296,6 @@ For issues or questions:
 
 ---
 
-**Author**: ismdevteam  
-**Status**: Production Ready  
+**Author**: ismdevteam
+**Status**: Production Ready
 **Last Updated**: 2026-02-03

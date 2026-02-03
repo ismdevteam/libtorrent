@@ -5,8 +5,9 @@
 
 #include <string>
 #include <vector>
+#include <sys/stat.h>
+#include <dirent.h>
 
-// Forward declarations
 namespace libtorrent {
     class session;
 }
@@ -39,6 +40,21 @@ std::string path_append(std::string const& lhs, std::string const& rhs);
 std::string make_absolute_path(std::string const& p);
 
 /**
+ * Create directory
+ */
+bool create_directory(const std::string& path);
+
+/**
+ * Check if directory exists
+ */
+bool directory_exists(const std::string& path);
+
+/**
+ * Check if file exists
+ */
+bool file_exists(const std::string& path);
+
+/**
  * List directory contents with filter
  */
 std::vector<std::string> list_dir(
@@ -58,3 +74,4 @@ void scan_dir(std::string const& dir_path, libtorrent::session& ses);
 bool is_resume_file(std::string const& s);
 
 } // namespace piece_cache
+

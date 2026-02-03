@@ -10,6 +10,7 @@
 #else
 #include <dirent.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 
 namespace piece_cache {
@@ -39,12 +40,10 @@ bool is_absolute_path(std::string const& f)
     if (f.empty()) return false;
 #if defined(TORRENT_WINDOWS) || defined(TORRENT_OS2)
     int i = 0;
-    // match the xx:\ or xx:/ form
     while (f[i] && strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVXYZ", f[i])) ++i;
     if (i < int(f.size()-1) && f[i] == ':' && (f[i+1] == '\\' || f[i+1] == '/'))
         return true;
 
-    // match the \\ form
     if (int(f.size()) >= 2 && f[0] == '\\' && f[1] == '\\')
         return true;
     return false;
@@ -85,6 +84,27 @@ std::string make_absolute_path(std::string const& p)
     return ret;
 }
 
+bool create_directory(const std::string& path)
+{
+#ifdef TORRENT_WINDOWS
+    return _mkdir(path.c_str()) == 0 || errno == EEXIST;
+#else
+    return mkdir(path.c_str(), 0777) == 0 || errno == EEXIST;
+#endif
+}
+
+bool directory_exists(const std::string& path)
+{
+    struct stat info;
+    return stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFDIR);
+}
+
+bool file_exists(const std::string& path)
+{
+    struct stat info;
+    return stat(path.c_str(), &info) == 0 && (info.st_mode & S_IFREG);
+}
+
 std::vector<std::string> list_dir(
     std::string path,
     bool (*filter_fun)(lt::string_view),
@@ -112,7 +132,6 @@ std::vector<std::string> list_dir(
     } while (FindNextFileA(handle, &fd));
     FindClose(handle);
 #else
-
     if (!path.empty() && path[path.size()-1] == '/')
         path.resize(path.size()-1);
 
@@ -153,7 +172,6 @@ void scan_dir(std::string const& dir_path, lt::session& ses)
     {
         std::string const file = path_append(dir_path, e);
 
-        // there's a new file in the monitor directory, load it up
         if (add_torrent(ses, file))
         {
             if (::remove(file.c_str()) < 0)

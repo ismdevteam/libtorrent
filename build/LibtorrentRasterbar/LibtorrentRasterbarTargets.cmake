@@ -47,10 +47,10 @@ unset(_cmake_expected_targets)
 
 
 # Create imported target LibtorrentRasterbar::torrent-rasterbar
-add_library(LibtorrentRasterbar::torrent-rasterbar SHARED IMPORTED)
+add_library(LibtorrentRasterbar::torrent-rasterbar STATIC IMPORTED)
 
 set_target_properties(LibtorrentRasterbar::torrent-rasterbar PROPERTIES
-  INTERFACE_COMPILE_DEFINITIONS "TORRENT_LINKING_SHARED;\$<\$<CONFIG:Debug>:TORRENT_USE_ASSERTS>;BOOST_ASIO_ENABLE_CANCELIO;BOOST_ASIO_NO_DEPRECATED;TORRENT_USE_OPENSSL;TORRENT_USE_LIBCRYPTO;TORRENT_SSL_PEERS;OPENSSL_NO_SSL2"
+  INTERFACE_COMPILE_DEFINITIONS "\$<\$<CONFIG:Debug>:TORRENT_USE_ASSERTS>;BOOST_ASIO_ENABLE_CANCELIO;BOOST_ASIO_NO_DEPRECATED;TORRENT_USE_OPENSSL;TORRENT_USE_LIBCRYPTO;TORRENT_SSL_PEERS;OPENSSL_NO_SSL2"
   INTERFACE_COMPILE_FEATURES "cxx_std_14;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_variable_templates"
   INTERFACE_COMPILE_OPTIONS "-fexceptions"
   INTERFACE_INCLUDE_DIRECTORIES "/mnt/sdd1/dev/libtorrent/include"
@@ -60,8 +60,8 @@ set_target_properties(LibtorrentRasterbar::torrent-rasterbar PROPERTIES
 # Import target "LibtorrentRasterbar::torrent-rasterbar" for configuration "Release"
 set_property(TARGET LibtorrentRasterbar::torrent-rasterbar APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
 set_target_properties(LibtorrentRasterbar::torrent-rasterbar PROPERTIES
-  IMPORTED_LOCATION_RELEASE "/mnt/sdd1/dev/libtorrent/build/libtorrent-rasterbar.so.2.0.11"
-  IMPORTED_SONAME_RELEASE "libtorrent-rasterbar.so.2.0"
+  IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "CXX"
+  IMPORTED_LOCATION_RELEASE "/mnt/sdd1/dev/libtorrent/build/libtorrent-rasterbar.a"
   )
 
 # This file does not depend on other imported targets which have

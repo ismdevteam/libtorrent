@@ -38,18 +38,6 @@
 #include "libtorrent/load_torrent.hpp"
 
 #include "global_settings.hpp"
-
-// Replace the old declarations with:
-namespace global_settings {
-    std::string save_path(".");
-    int max_connections_per_torrent = 50;
-    int torrent_upload_limit = 0;
-    int torrent_download_limit = 0;
-    bool seed_mode = false;
-    bool share_mode = false;
-    lt::storage_mode_t allocation_mode = lt::storage_mode_sparse;
-}
-
 #include "torrent_view.hpp"
 #include "session_view.hpp"
 #include "print.hpp"
@@ -72,8 +60,17 @@ namespace global_settings {
 #include <dirent.h>
 #endif
 
-// Forward declarations of client_test.cpp functions/utilities
-// These are copy-pasted from client_test but should ideally be in a shared header
+// Global settings (defined in global_settings namespace)
+namespace global_settings {
+    std::string save_path(".");
+    int max_connections_per_torrent = 50;
+    int torrent_upload_limit = 0;
+    int torrent_download_limit = 0;
+    bool seed_mode = false;
+    bool share_mode = false;
+    lt::storage_mode_t allocation_mode = lt::storage_mode_sparse;
+}
+
 namespace {
 
 using lt::total_milliseconds;
@@ -93,26 +90,11 @@ using lt::make_address_v4;
 using lt::make_address;
 using lt::torrent_status;
 using lt::operation_t;
-//using lt::errors;
 using lt::tcp;
-//using lt::error_code;
+using lt::error_code;
 
 using std::chrono::duration_cast;
 using std::stoi;
-
-// Global settings (declared extern in torrent_utils.cpp)
-lt::storage_mode_t allocation_mode = lt::storage_mode_sparse;
-std::string save_path(".");
-int torrent_upload_limit = 0;
-int torrent_download_limit = 0;
-std::string monitor_dir;
-int poll_interval = 5;
-int max_connections_per_torrent = 50;
-bool seed_mode = false;
-bool stats_enabled = false;
-bool exit_on_finish = false;
-bool share_mode = false;
-bool quit = false;
 
 // Print settings
 bool print_trackers = false;
@@ -143,6 +125,11 @@ std::vector<lt::dht_routing_bucket> dht_routing_table;
 #endif
 
 std::string peer;
+std::string monitor_dir;
+int poll_interval = 5;
+bool stats_enabled = false;
+bool exit_on_finish = false;
+bool quit = false;
 FILE* g_log_file = nullptr;
 
 struct client_state_t
@@ -168,10 +155,7 @@ struct client_state_t
     }
 };
 
-// Include helper functions from client_test.cpp
-// (sleep_and_input, print functions, etc. - copied from original)
-// For brevity, I'll include minimal versions
-
+// Helper functions
 #ifdef _WIN32
 bool sleep_and_input(int* c, lt::time_duration const sleep)
 {
@@ -206,7 +190,7 @@ struct set_keypress
         else new_settings.c_lflag &= ul(~ICANON);
         new_settings.c_cc[VTIME] = 0;
         new_settings.c_cc[VMIN] = 1;
-        tcsetattr(0,TCSANOW,&new_settings);
+        tcsetattr(0, TCSANOW, &new_settings);
     }
     ~set_keypress() { tcsetattr(0, TCSANOW, &stored_settings); }
 private:
@@ -222,7 +206,7 @@ retry:
     FD_ZERO(&set);
     FD_SET(0, &set);
     auto const delay = total_milliseconds(done - lt::clock_type::now());
-    timeval tv = {int(delay / 1000), int((delay % 1000) * 1000) };
+    timeval tv = {int(delay / 1000), int((delay % 1000) * 1000)};
     ret = select(1, &set, nullptr, nullptr, &tv);
     if (ret > 0)
     {
@@ -286,12 +270,11 @@ void print_alert(lt::alert const* a, std::string& str)
     static auto const first_ts = a->timestamp();
 
     if (g_log_file)
-        std::fprintf(g_log_file, "[%" PRId64 "] %s\n"
-            , std::int64_t(duration_cast<std::chrono::milliseconds>(a->timestamp() - first_ts).count())
-            ,  a->message().c_str());
+        std::fprintf(g_log_file, "[%" PRId64 "] %s\n",
+            std::int64_t(duration_cast<std::chrono::milliseconds>(a->timestamp() - first_ts).count()),
+            a->message().c_str());
 }
 
-// Alert handler - integrates cache handling
 bool handle_alert(client_state_t& client_state, lt::alert* a)
 {
     using namespace lt;
@@ -303,7 +286,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
     // Handle torrent finished alert with cache reading
     if (torrent_finished_alert* p = alert_cast<torrent_finished_alert>(a))
     {
-        p->handle.set_max_connections(max_connections_per_torrent / 2);
+        p->handle.set_max_connections(global_settings::max_connections_per_torrent / 2);
 
         // Read all pieces when torrent finishes to cache them
         if (piece_cache::cache_manager)
@@ -337,8 +320,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
         if (exit_on_finish) quit = true;
     }
 
-    // Rest of alert handling from client_test.cpp
-    // (session_stats, peer_info, file_progress, etc.)
+    // Rest of alert handling
     if (session_stats_alert* s = alert_cast<session_stats_alert>(a))
     {
         client_state.ses_view.update_counters(s->counters(), s->timestamp());
@@ -403,9 +385,9 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
     {
         if (p->error)
         {
-            std::fprintf(stderr, "failed to add torrent: %s %s\n"
-                , p->params.ti ? p->params.ti->name().c_str() : p->params.name.c_str()
-                , p->error.message().c_str());
+            std::fprintf(stderr, "failed to add torrent: %s %s\n",
+                p->params.ti ? p->params.ti->name().c_str() : p->params.name.c_str(),
+                p->error.message().c_str());
         }
         else
         {
@@ -471,8 +453,7 @@ bool handle_alert(client_state_t& client_state, lt::alert* a)
 
     if (peer_disconnected_alert* pd = alert_cast<peer_disconnected_alert>(a))
     {
-        if (pd->op == operation_t::connect
-            || pd->error == errors::timed_out_no_handshake)
+        if (pd->op == operation_t::connect || pd->error == errors::timed_out_no_handshake)
             return true;
     }
 
@@ -561,7 +542,6 @@ void assign_setting(lt::settings_pack& settings, std::string const& key, char co
             }
             break;
         case settings_pack::int_type_base:
-            // Handle int settings (simplified from original)
             try {
                 settings.set_int(sett_name, std::stoi(value));
             } catch (...) {
@@ -599,7 +579,7 @@ int main(int argc, char* argv[])
         {
             piece_cache::cache_manager = std::make_unique<PieceCacheManager>(piece_cache::g_cache_config.cache_root);
             piece_cache::cache_during_download = piece_cache::g_cache_config.cache_during_download;
-            
+
             if (piece_cache::g_cache_config.disable_original_storage) {
                 std::cout << "Original content storage disabled, using piece cache only" << std::endl;
             }
@@ -627,22 +607,22 @@ int main(int argc, char* argv[])
 
     auto& settings = params.settings;
     settings.set_str(settings_pack::user_agent, "client_test/" LIBTORRENT_VERSION);
-    settings.set_int(settings_pack::alert_mask
-        , lt::alert_category::error
-        | lt::alert_category::peer
-        | lt::alert_category::port_mapping
-        | lt::alert_category::storage
-        | lt::alert_category::tracker
-        | lt::alert_category::connect
-        | lt::alert_category::status
-        | lt::alert_category::ip_block
-        | lt::alert_category::performance_warning
-        | lt::alert_category::dht
-        | lt::alert_category::incoming_request
-        | lt::alert_category::dht_operation
-        | lt::alert_category::port_mapping_log
-        | lt::alert_category::file_progress
-        | lt::alert_category::piece_progress);
+    settings.set_int(settings_pack::alert_mask,
+        lt::alert_category::error |
+        lt::alert_category::peer |
+        lt::alert_category::port_mapping |
+        lt::alert_category::storage |
+        lt::alert_category::tracker |
+        lt::alert_category::connect |
+        lt::alert_category::status |
+        lt::alert_category::ip_block |
+        lt::alert_category::performance_warning |
+        lt::alert_category::dht |
+        lt::alert_category::incoming_request |
+        lt::alert_category::dht_operation |
+        lt::alert_category::port_mapping_log |
+        lt::alert_category::file_progress |
+        lt::alert_category::piece_progress);
 
     lt::time_duration refresh_delay = lt::milliseconds(500);
     bool rate_limit_locals = false;
@@ -686,7 +666,7 @@ int main(int argc, char* argv[])
         switch (argv[i][1])
         {
             case 'k': settings = lt::high_performance_seed(); continue;
-            case 'G': seed_mode = true; continue;
+            case 'G': global_settings::seed_mode = true; continue;
             case 'O': stats_enabled = true; continue;
             case '1': exit_on_finish = true; continue;
             case 'C': piece_cache::g_cache_config.cache_during_download = true; continue;
@@ -695,7 +675,7 @@ int main(int argc, char* argv[])
                 piece_cache::g_cache_config.seed_from_cache = true;
                 piece_cache::g_cache_config.disable_original_storage = true;
                 continue;
-            case 'Q': share_mode = true; continue;
+            case 'Q': global_settings::share_mode = true; continue;
             case 'Y': rate_limit_locals = true; continue;
             case '0': params.disk_io_constructor = lt::disabled_disk_io_constructor; continue;
             case 'h': print_usage(); return 0;
@@ -709,18 +689,18 @@ int main(int argc, char* argv[])
         switch (argv[i][1])
         {
             case 'f': g_log_file = std::fopen(arg, "w+"); break;
-            case 's': save_path = piece_cache::make_absolute_path(arg); break;
-            case 'U': torrent_upload_limit = atoi(arg) * 1000; break;
-            case 'D': torrent_download_limit = atoi(arg) * 1000; break;
+            case 's': global_settings::save_path = piece_cache::make_absolute_path(arg); break;
+            case 'U': global_settings::torrent_upload_limit = atoi(arg) * 1000; break;
+            case 'D': global_settings::torrent_download_limit = atoi(arg) * 1000; break;
             case 'm': monitor_dir = piece_cache::make_absolute_path(arg); break;
             case 't': poll_interval = atoi(arg); break;
             case 'F': refresh_delay = lt::milliseconds(atoi(arg)); break;
             case 'a':
-                allocation_mode = (arg == std::string("sparse"))
+                global_settings::allocation_mode = (arg == std::string("sparse"))
                     ? lt::storage_mode_sparse
                     : lt::storage_mode_allocate;
                 break;
-            case 'T': max_connections_per_torrent = atoi(arg); break;
+            case 'T': global_settings::max_connections_per_torrent = atoi(arg); break;
             case 'r': peer = arg; break;
             case 'e': loop_limit = atoi(arg); break;
         }
@@ -728,7 +708,7 @@ int main(int argc, char* argv[])
     }
 
     // Create resume directory
-    std::string resume_path = piece_cache::path_append(save_path, ".resume");
+    std::string resume_path = piece_cache::path_append(global_settings::save_path, ".resume");
 #ifdef TORRENT_WINDOWS
     _mkdir(resume_path.c_str());
 #else
@@ -751,11 +731,11 @@ int main(int argc, char* argv[])
     if (rate_limit_locals)
     {
         lt::ip_filter pcf;
-        pcf.add_rule(make_address_v4("0.0.0.0")
-            , make_address_v4("255.255.255.255")
-            , 1 << static_cast<std::uint32_t>(lt::session::global_peer_class_id));
-        pcf.add_rule(make_address_v6("::")
-            , make_address_v6("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), 1);
+        pcf.add_rule(make_address_v4("0.0.0.0"),
+            make_address_v4("255.255.255.255"),
+            1 << static_cast<std::uint32_t>(lt::session::global_peer_class_id));
+        pcf.add_rule(make_address_v6("::"),
+            make_address_v6("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), 1);
         ses.set_peer_class_filter(pcf);
     }
 
@@ -774,15 +754,15 @@ int main(int argc, char* argv[])
         lt::error_code ec;
         std::string const resume_dir = piece_cache::g_cache_config.disable_original_storage ?
             piece_cache::path_append(piece_cache::g_cache_config.cache_root, ".resume") :
-            piece_cache::path_append(save_path, ".resume");
-        
-        std::vector<std::string> ents = piece_cache::list_dir(resume_dir
-            , [](lt::string_view p) { return p.size() > 7 && p.substr(p.size() - 7) == ".resume"; }, ec);
-        
+            piece_cache::path_append(global_settings::save_path, ".resume");
+
+        std::vector<std::string> ents = piece_cache::list_dir(resume_dir,
+            [](lt::string_view p) { return p.size() > 7 && p.substr(p.size() - 7) == ".resume"; }, ec);
+
         if (ec)
         {
-            std::fprintf(stderr, "failed to list resume directory \"%s\": (%s : %d) %s\n"
-                , resume_dir.c_str(), ec.category().name(), ec.value(), ec.message().c_str());
+            std::fprintf(stderr, "failed to list resume directory \"%s\": (%s : %d) %s\n",
+                resume_dir.c_str(), ec.category().name(), ec.value(), ec.message().c_str());
         }
         else
         {
@@ -794,7 +774,7 @@ int main(int argc, char* argv[])
                 std::vector<char> resume_data;
                 if (!piece_cache::load_file(file, resume_data))
                     continue;
-                
+
                 add_torrent_params p = lt::read_resume_data(resume_data, ec);
                 if (ec) continue;
 
@@ -821,8 +801,8 @@ int main(int argc, char* argv[])
         int terminal_height = 50;
         std::tie(terminal_width, terminal_height) = terminal_size();
 
-        int const height = std::min(terminal_height / 2
-            , std::max(5, view.num_visible_torrents() + 2));
+        int const height = std::min(terminal_height / 2,
+            std::max(5, view.num_visible_torrents() + 2));
         view.set_size(terminal_width, height);
         ses_view.set_pos(height);
         ses_view.set_width(terminal_width);
@@ -830,13 +810,12 @@ int main(int argc, char* argv[])
         int c = 0;
         if (sleep_and_input(&c, refresh_delay))
         {
-            // Handle keyboard input (simplified)
             if (c == 'q')
             {
                 quit = true;
                 break;
             }
-            
+
             if (c == 'm')
             {
                 char url[4096];
@@ -851,7 +830,7 @@ int main(int argc, char* argv[])
 
         pop_alerts(client_state, ses);
 
-        // Render UI (simplified - original has full UI code)
+        // Render UI (simplified)
         std::printf("\r                                                                \r");
         std::fflush(stdout);
 
