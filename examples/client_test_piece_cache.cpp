@@ -853,14 +853,25 @@ void set_torrent_params(lt::add_torrent_params& p)
 
     // ADDED: Use disabled disk I/O if -Z flag is set
     if (disable_original_storage) {
+        // For seed-from-cache mode, use a unique deterministic path
+        // to avoid conflicts between different torrents
+        std::string dummy_base = "/tmp/lt_dummy";
+        
         if (seed_from_cache) {
-            // When seeding from cache, use cache root as save path but with disabled storage
-            p.save_path = cache_root;
-            log_message("Seed-from-cache mode: Using cache root as save path: " + cache_root);
+            // In seed-from-cache mode, we need to avoid file checks
+            // Use info hash in path for uniqueness
+            std::string hash_str = to_hex(p.info_hashes.get_best());
+            p.save_path = dummy_base + "/cache_seed/" + hash_str;
+            
+            // CRITICAL: Tell libtorrent to skip file verification
+            p.flags |= lt::torrent_flags::seed_mode;
+            p.flags |= lt::torrent_flags::override_resume_data;
+            
+            log_message("Seed-from-cache: Using unique dummy path, skipping file checks");
         } else {
-            // Original -Z behavior: use dummy save path
-            p.save_path = "/tmp/dummy_save_path";
-            log_message("Fileless mode (-Z): Disabling original content storage, using dummy save path");
+            // Regular fileless mode
+            p.save_path = dummy_base + "/fileless";
+            log_message("Fileless mode: Using dummy path");
         }
     } else {
         p.save_path = save_path;
@@ -873,7 +884,6 @@ void set_torrent_params(lt::add_torrent_params& p)
     if (share_mode) p.flags |= lt::torrent_flags::share_mode;
     p.storage_mode = allocation_mode;
 }
-
 // ADDED: resume_file function definition that was missing
 std::string resume_file(lt::info_hash_t const& info_hash)
 {
@@ -890,7 +900,6 @@ lt::add_torrent_params create_cache_resume_data(lt::info_hash_t const& info_hash
 {
     lt::add_torrent_params p;
     p.info_hashes = info_hash;
-    // Use const_cast to handle the shared_ptr<const T> to shared_ptr<T> conversion
     p.ti = std::const_pointer_cast<lt::torrent_info>(ti);
     
     if (cache_manager && ti) {
@@ -904,7 +913,11 @@ lt::add_torrent_params create_cache_resume_data(lt::info_hash_t const& info_hash
         }
         
         p.have_pieces = pieces_bitfield;
+        
+        // CRITICAL: Set these flags to avoid file checking
         p.flags |= lt::torrent_flags::seed_mode;
+        p.flags |= lt::torrent_flags::override_resume_data;
+        
         log_message("Created resume data from cache: " + std::to_string(cached_pieces.size()) + " pieces");
     }
     
@@ -923,7 +936,10 @@ bool add_torrent(lt::session& ses, std::string torrent) try
 	lt::add_torrent_params atp = lt::load_torrent_file(torrent);
 
 	std::vector<char> resume_data;
-	if (load_file(resume_file(atp.info_hashes), resume_data))
+	
+	// MODIFIED: In seed-from-cache mode, don't load resume file
+	// because it has wrong file paths and will cause errors
+	if (load_file(resume_file(atp.info_hashes), resume_data) && !seed_from_cache)
 	{
 		lt::add_torrent_params rd = lt::read_resume_data(resume_data, ec);
 		if (ec) std::printf("  failed to load resume data: %s\n", ec.message().c_str());
@@ -935,6 +951,9 @@ bool add_torrent(lt::session& ses, std::string torrent) try
 		if (atp.ti) {
 			atp = create_cache_resume_data(atp.info_hashes, atp.ti);
 			std::printf("  created resume data from cache for %s\n", atp.ti->name().c_str());
+			
+			// IMPORTANT: Set flag to skip file checking
+			atp.flags |= lt::torrent_flags::seed_mode;
 		}
 	}
 
