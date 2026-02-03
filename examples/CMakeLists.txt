@@ -41,10 +41,10 @@ add_executable(client_test_piece_cache
 target_link_libraries(client_test_piece_cache PRIVATE torrent-rasterbar)
 
 # OpenSSL is required for SHA1 hashing in piece_cache_manager.cpp
-find_package(OpenSSL)
-if(OPENSSL_FOUND)
-    target_link_libraries(client_test_piece_cache PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
+#find_package(OpenSSL)
+#if(OPENSSL_FOUND)
+#    target_link_libraries(client_test_piece_cache PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+#endif()
 
-# Set C++14 standard (changed from C++17)
-target_compile_features(client_test_piece_cache PRIVATE cxx_std_14)
+# Set C++14 standard (changed from C++14)
+#target_compile_features(client_test_piece_cache PRIVATE cxx_std_14)

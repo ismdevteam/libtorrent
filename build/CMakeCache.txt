@@ -17,8 +17,11 @@
 //No help, variable specified on the command line.
 BOOST_ROOT:UNINITIALIZED=/usr
 
+//No help, variable specified on the command line.
+BUILDD_SHARED_LIBS:UNINITIALIZED=OFF
+
 //build libtorrent as a shared library
-BUILD_SHARED_LIBS:BOOL=OFF
+BUILD_SHARED_LIBS:BOOL=ON
 
 //The directory containing a CMake configuration file for Boost.
 Boost_DIR:PATH=/usr/lib/x86_64-linux-gnu/cmake/Boost-1.83.0
@@ -28,6 +31,9 @@ Boost_INCLUDE_DIR:PATH=/usr/include
 
 //No help, variable specified on the command line.
 Boost_NO_SYSTEM_PATHS:UNINITIALIZED=ON
+
+//No help, variable specified on the command line.
+Boost_USE_STATIC_LIBS:UNINITIALIZED=ON
 
 //No help, variable specified on the command line.
 Boost_USE_STATIC_RUNTIME:UNINITIALIZED=ON
@@ -69,7 +75,7 @@ CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG
 CMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG
 
 //No help, variable specified on the command line.
-CMAKE_CXX_STANDARD:UNINITIALIZED=17
+CMAKE_CXX_STANDARD:UNINITIALIZED=14
 
 //C compiler
 CMAKE_C_COMPILER:FILEPATH=/usr/bin/cc
@@ -304,9 +310,6 @@ OPENSSL_CRYPTO_LIBRARY:FILEPATH=/usr/lib/x86_64-linux-gnu/libcrypto.so
 
 //Path to a file.
 OPENSSL_INCLUDE_DIR:PATH=/usr/include
-
-//No help, variable specified on the command line.
-OPENSSL_ROOT_DIR:UNINITIALIZED=/usr
 
 //Path to a library.
 OPENSSL_SSL_LIBRARY:FILEPATH=/usr/lib/x86_64-linux-gnu/libssl.so
