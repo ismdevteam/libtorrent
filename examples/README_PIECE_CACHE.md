@@ -17,26 +17,26 @@ This feature adds fileless torrent operation capability to libtorrent, allowing 
 - `examples/simple_piece_cache.hpp` - Integration layer with libtorrent session
 - `examples/client_test_piece_cache.cpp` - Enhanced client with piece cache support
 
-## Usage
-
 ### Building
 ```bash
 git clone --recurse-submodules -b piece-cache-feature https://github.com/ismdevteam/libtorrent.git
 cd ./libtorrent
 mkdir build && cd build
 
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=14 -G Ninja .. -Dbuild_examples=ON
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -G Ninja .. -Dbuild_examples=ON
 ```
 
 # Or static configuration
 ```
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=14 -G Ninja .. -Dbuild_examples=ON -Dstatic_runtime=ON -DBUILD_SHARED_LIBS=OFF -DBOOST_ROOT=/usr -DBoost_NO_SYSTEM_PATHS=ON -Dpython-bindings=OFF -Dpython-egg-info=OFF -DBoost_USE_STATIC_RUNTIME=ON
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -G Ninja .. -Dbuild_examples=ON -Dstatic_runtime=ON -DBUILD_SHARED_LIBS=OFF -DBOOST_ROOT=/usr -DBoost_NO_SYSTEM_PATHS=ON -Dpython-bindings=OFF -Dpython-egg-info=OFF -DBoost_USE_STATIC_RUNTIME=ON
 ```
 # Build
 
 ```
 ninja -j$(nproc) client_test_piece_cache
 ```
+
+## Usage
 
 ### Command Line Options
 - `-Z` - Enable fileless mode (disable original content storage)
@@ -103,7 +103,7 @@ cache_root/
 ## Compatibility
 
 - libtorrent 2.0.11+
-- C++14 compatible compilers
+- C++17 compatible compilers
 - Tested on Linux, should work on Windows/macOS with minor adjustments
 
 ## Testing with libtorrent v2.0.11
