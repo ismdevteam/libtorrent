@@ -85,6 +85,11 @@ bool PieceCacheManager::cache_piece_data(const lt::info_hash_t& info_hash,
         torrent_info = it->second;
     }
     
+    // Log the caching attempt
+    std::cout << "Caching piece " << static_cast<int>(piece_index) 
+              << " (" << piece_size << " bytes) for torrent: " 
+              << torrent_info->name() << std::endl;
+    
     // Use OpenSSL's SHA1 for hashing
     unsigned char digest[SHA_DIGEST_LENGTH];
     SHA1(reinterpret_cast<const unsigned char*>(piece_data), piece_size, digest);
@@ -95,7 +100,7 @@ bool PieceCacheManager::cache_piece_data(const lt::info_hash_t& info_hash,
 
     if (calculated_hash != expected_hash)
     {
-        std::cerr << "Piece " << static_cast<int>(piece_index) 
+        std::cerr << "ERROR: Piece " << static_cast<int>(piece_index) 
                   << " hash verification failed, not caching" << std::endl;
         std::cerr << "Expected: " << expected_hash << std::endl;
         std::cerr << "Calculated: " << calculated_hash << std::endl;
@@ -132,8 +137,8 @@ bool PieceCacheManager::cache_piece_data(const lt::info_hash_t& info_hash,
         m_statistics.cache_writes++;
     }
     
-    std::cout << "Cached piece " << static_cast<int>(piece_index) 
-              << " (" << piece_size << " bytes)" << std::endl;
+    std::cout << "SUCCESS: Cached piece " << static_cast<int>(piece_index) 
+              << " (" << piece_size << " bytes) to " << piece_path << std::endl;
     
     return true;
 }
@@ -157,6 +162,7 @@ int PieceCacheManager::read_piece(const lt::info_hash_t& info_hash,
     
     if (!std::filesystem::exists(piece_path))
     {
+        std::cout << "Cache MISS for piece " << static_cast<int>(piece_index) << std::endl;
         update_statistics(0, 1, 0);
         return -1;
     }
@@ -189,9 +195,10 @@ int PieceCacheManager::read_piece(const lt::info_hash_t& info_hash,
         return -1;
     }
     
+    std::cout << "Cache HIT for piece " << static_cast<int>(piece_index)
+              << " (" << file_size << " bytes) from " << piece_path << std::endl;
+    
     update_statistics(1, 0, 0);
-    std::cout << "Read cached piece " << static_cast<int>(piece_index)
-              << " (" << file_size << " bytes)" << std::endl;
     
     return static_cast<int>(file_size);
 }
@@ -332,4 +339,3 @@ void PieceCacheManager::update_statistics(int hits_delta, int misses_delta, int 
     m_statistics.total_cache_size += size_delta;
     m_statistics.cache_reads += (hits_delta > 0 || misses_delta > 0) ? 1 : 0;
 }
-
