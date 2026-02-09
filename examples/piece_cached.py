@@ -227,9 +227,9 @@ def main():
     parser.add_argument(
         "-p", "--piece-size", 
         type=int, 
-        default=1048576,
-        choices=[524288, 1048576, 4194304],
-        help="Piece size in bytes (default: 1048576)"
+        default=16384,
+        choices=[4096, 8192, 16384, 32768, 65536],
+        help="Piece size in bytes (default: 16384)"
     )
     parser.add_argument(
         "-l", "--list", 
