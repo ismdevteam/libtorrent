@@ -48,6 +48,7 @@ bin
 cmake-build-*
 CMakeLists.txt.user
 config*
+build
 build-aux
 test_tmp_*
 libtool
