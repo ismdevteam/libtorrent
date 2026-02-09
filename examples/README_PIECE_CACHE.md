@@ -20,7 +20,7 @@ This feature adds fileless torrent operation capability to libtorrent, allowing 
 
 ### Building
 ```bash
-git clone --recurse-submodules -b piece-cache-feature https://github.com/ismdevteam/libtorrent.git
+git clone --recurse-submodules -b piece-cache https://github.com/ismdevteam/libtorrent.git
 cd ./libtorrent
 mkdir build && cd build
 
