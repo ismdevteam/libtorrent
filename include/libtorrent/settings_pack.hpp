@@ -1026,6 +1026,11 @@ namespace aux {
 			// man-in-the-middle connections.
 			proxy_send_host_in_connect,
 
+			// When set, downloaded files will have the no-copy-on-write flag
+			// (``FS_NOCOW_FL``) set on Linux. This mitigates heavy
+			// fragmentation on filesystems like btrfs.
+			disk_disable_copy_on_write,
+
 			max_bool_setting_internal
 		};
 
@@ -1318,11 +1323,14 @@ namespace aux {
 
 			// ``peer_dscp`` determines the DSCP field in the IP header of every
 			// packet sent to peers (including web seeds). ``0x0`` means no marking,
-			// ``0x04`` represents Lower Effort. For more details see `RFC 8622`_.
+			// ``0x01`` represents Lower Effort. For more details see `RFC 8622`_
+			// and IANA's `dscp registry`_.
 			//
 			// .. _`RFC 8622`: http://www.faqs.org/rfcs/rfc8622.html
+			// .. _`dscp registry`: https://www.iana.org/assignments/dscp-registry/dscp-registry.xhtml
 			//
-			// ``peer_tos`` is the backwards compatible name for this setting.
+			// ``peer_tos`` is the old name for ``peer_dscp``, it's still
+			// available for backwards compatibility.
 			peer_dscp,
 
 			// hidden

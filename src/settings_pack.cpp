@@ -240,6 +240,7 @@ constexpr int DISK_WRITE_MODE = settings_pack::enable_os_cache;
 		SET(enable_set_file_valid_data, false, nullptr),
 		SET(socks5_udp_send_local_ep, false, nullptr),
 		SET(proxy_send_host_in_connect, false, nullptr),
+		SET(disk_disable_copy_on_write, true, nullptr),
 	}});
 
 	CONSTEXPR_SETTINGS
@@ -285,7 +286,7 @@ constexpr int DISK_WRITE_MODE = settings_pack::enable_os_cache;
 		SET(disk_io_read_mode, settings_pack::enable_os_cache, nullptr),
 		SET(outgoing_port, 0, nullptr),
 		SET(num_outgoing_ports, 0, nullptr),
-		SET(peer_dscp, 0x04, &session_impl::update_peer_dscp),
+		SET(peer_dscp, 0x01, &session_impl::update_peer_dscp),
 		SET(active_downloads, 3, &session_impl::trigger_auto_manage),
 		SET(active_seeds, 5, &session_impl::trigger_auto_manage),
 		SET(active_checking, 1, &session_impl::trigger_auto_manage),

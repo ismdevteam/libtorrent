@@ -2070,7 +2070,10 @@ namespace libtorrent {
 			TORRENT_ASSERT(m_have_piece.count() == m_have_piece.size());
 			TORRENT_ASSERT(m_have_piece.size() == t->torrent_file().num_pieces());
 
-			t->seen_complete();
+			// only mark last-seen-complete if we've received actual payload data
+			// from this peer, to prevent lying peers from updating the timestamp
+			if (m_statistics.total_payload_download() > 0)
+				t->seen_complete();
 			t->set_seed(m_peer_info, true);
 			TORRENT_ASSERT(is_seed());
 
@@ -5395,9 +5398,10 @@ namespace libtorrent {
 				if (read_mode == settings_pack::disable_os_cache)
 					flags |= disk_interface::volatile_read;
 
+				auto const issue_time = clock_type::now();
 				m_disk_thread.async_read(t->storage(), r
-					, [conn = self(), r](disk_buffer_holder buf, storage_error const& ec)
-					{ conn->wrap(&peer_connection::on_disk_read_complete, std::move(buf), ec, r, clock_type::now()); }
+					, [conn = self(), r, issue_time](disk_buffer_holder buf, storage_error const& ec)
+					{ conn->wrap(&peer_connection::on_disk_read_complete, std::move(buf), ec, r, issue_time); }
 					, flags);
 			}
 			m_last_sent_payload.set(m_connect, clock_type::now());
@@ -6254,7 +6258,9 @@ namespace libtorrent {
 		TORRENT_ASSERT(m_recv_buffer.pos_at_end());
 		TORRENT_ASSERT(m_recv_buffer.packet_size() > 0);
 
-		if (is_seed())
+		// only mark last-seen-complete if we've received actual payload data
+		// from this peer, to prevent lying peers from updating the timestamp
+		if (is_seed() && m_statistics.total_payload_download() > 0)
 		{
 			std::shared_ptr<torrent> t = m_torrent.lock();
 			if (t) t->seen_complete();
