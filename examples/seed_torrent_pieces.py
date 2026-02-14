@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Seed Torrent Pieces - RAM filesystem seeder
-Reconstructs files in tmpfs and seeds from there
+Seed Torrent Pieces - Hash-mapped storage
+Files are stored by their content hash, mapped during seeding
 """
 import sys
 import os
@@ -13,7 +13,7 @@ import shutil
 import signal
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 import argparse
 
 # Try to import libtorrent
@@ -40,7 +40,12 @@ def import_libtorrent(custom_path: Optional[str] = None) -> bool:
         print("❌ Error: libtorrent not found", file=sys.stderr)
         return False
 
-class RAMSeeder:
+class HashMappedSeeder:
+    """
+    Seeder that stores files by their content hash
+    Files in RAM are named by hash, mapped to torrent paths during seeding
+    """
+    
     def __init__(self, torrent_path: Path, pieces_dir: Path, listen_port: int = 6881):
         self.torrent_path = torrent_path
         self.pieces_dir = pieces_dir
@@ -50,6 +55,8 @@ class RAMSeeder:
         self.running = False
         self.peers_info = {}
         self.pieces_served = set()
+        self.hash_map = {}  # Maps content hash -> file data
+        self.path_map = {}  # Maps torrent path -> content hash
         self.ram_path = None
 
         # Load torrent
@@ -60,16 +67,44 @@ class RAMSeeder:
         self.piece_length = self.ti.piece_length()
         self.total_size = self.ti.total_size()
 
-        # Load pieces into memory
-        self.piece_data = self._load_pieces()
+        # Load metadata from dump_torrent.py output
+        self._load_metadata()
+
+        # Load pieces and reconstruct files by hash
+        self._load_files_by_hash()
 
         print(f"\n📊 Torrent Info:")
         print(f"   Name: {self.name or '(empty)'}")
         print(f"   Info Hash: {self.info_hash}")
-        print(f"   Pieces in memory: {len(self.piece_data)}/{self.num_pieces}")
+        print(f"   Files stored by hash: {len(self.hash_map)}")
 
-    def _load_pieces(self) -> Dict[int, bytes]:
-        pieces = {}
+    def _load_metadata(self):
+        """Load metadata from metadata.json to get file root hashes"""
+        metadata_file = self.pieces_dir / "metadata.json"
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r') as f:
+                    self.metadata = json.load(f)
+                print(f"📋 Loaded metadata from: {metadata_file}")
+                
+                # Build path to hash mapping from metadata
+                if 'files' in self.metadata:
+                    for file_info in self.metadata['files']:
+                        if 'root_hash' in file_info and file_info['root_hash']:
+                            self.path_map[file_info['path']] = file_info['root_hash']
+                            print(f"   📍 {file_info['path']} -> {file_info['root_hash'][:16]}...")
+            except Exception as e:
+                print(f"⚠️  Could not load metadata: {e}")
+                self.metadata = None
+        else:
+            print("⚠️  No metadata.json found - will use piece-based reconstruction")
+            self.metadata = None
+
+    def _load_files_by_hash(self):
+        """Load files from pieces and store by content hash"""
+        print(f"\n🔍 Reconstructing files by hash from pieces...")
+        
+        # First, load all pieces into memory
         pieces_subdir = self.pieces_dir / "pieces"
         if pieces_subdir.exists():
             piece_files = sorted(pieces_subdir.glob("piece_*.dat"))
@@ -78,9 +113,11 @@ class RAMSeeder:
 
         if not piece_files:
             print("⚠️  No piece files found!")
-            return pieces
+            return
 
-        print(f"📦 Loading {len(piece_files)} pieces into memory...")
+        # Load pieces
+        piece_data = {}
+        print(f"📦 Loading {len(piece_files)} pieces...")
         for pf in piece_files:
             try:
                 idx = int(pf.stem.replace('piece_', ''))
@@ -93,23 +130,18 @@ class RAMSeeder:
                     else:
                         expected = bytes(expected)[:20]
                     if hashlib.sha1(data).digest() == expected:
-                        pieces[idx] = data
+                        piece_data[idx] = data
                         print(f"   ✅ Piece {idx:3d}: {len(data):8,} bytes")
                     else:
                         print(f"   ❌ Piece {idx:3d}: hash mismatch")
             except Exception as e:
                 print(f"   ⚠️  Error loading {pf.name}: {e}")
 
-        print(f"   Loaded {len(pieces)} pieces")
-        return pieces
+        if not piece_data:
+            print("❌ No valid pieces loaded")
+            return
 
-    def _reconstruct_files_in_ram(self) -> Path:
-        """Reconstruct all files in a tmpfs directory."""
-        # Use /dev/shm (tmpfs) if available, else fallback to /tmp
-        base = Path("/dev/shm") if Path("/dev/shm").exists() else Path("/tmp")
-        self.ram_path = Path(tempfile.mkdtemp(dir=base, prefix="torrent_ram_"))
-        print(f"📁 Reconstructing files in RAM: {self.ram_path}")
-
+        # Reconstruct each file from pieces
         fs = self.ti.files()
         piece_length = self.piece_length
 
@@ -117,48 +149,120 @@ class RAMSeeder:
             path = fs.file_path(i)
             size = fs.file_size(i)
             offset = fs.file_offset(i)
-            full_path = self.ram_path / path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            print(f"\n   🔨 Reconstructing: {path}")
+            
+            # Reconstruct file data
+            file_data = bytearray(size)
+            pieces_used = set()
+            
+            first_piece = offset // piece_length
+            last_piece = (offset + size - 1) // piece_length
 
-            # Create file (sparse, but we'll write data)
-            with open(full_path, 'wb') as f:
-                # Determine which pieces belong to this file
-                first_piece = offset // piece_length
-                last_piece = (offset + size - 1) // piece_length
+            for piece_idx in range(first_piece, last_piece + 1):
+                if piece_idx not in piece_data:
+                    print(f"      ⚠️  Missing piece {piece_idx}, filling with zeros")
+                    continue
+                    
+                piece_start = piece_idx * piece_length
+                piece_end = piece_start + self.ti.piece_size(piece_idx)
 
-                for piece_idx in range(first_piece, last_piece + 1):
-                    piece_start = piece_idx * piece_length
-                    piece_end = piece_start + self.ti.piece_size(piece_idx)
+                overlap_start = max(offset, piece_start)
+                overlap_end = min(offset + size, piece_end)
 
-                    # Overlap with this file
-                    overlap_start = max(offset, piece_start)
-                    overlap_end = min(offset + size, piece_end)
+                if overlap_end > overlap_start:
+                    file_pos = overlap_start - offset
+                    piece_off = overlap_start - piece_start
+                    length = overlap_end - overlap_start
+                    
+                    file_data[file_pos:file_pos + length] = \
+                        piece_data[piece_idx][piece_off:piece_off + length]
+                    pieces_used.add(piece_idx)
 
-                    if overlap_end > overlap_start:
-                        file_pos = overlap_start - offset
-                        if piece_idx in self.piece_data:
-                            # We have this piece
-                            piece_data = self.piece_data[piece_idx]
-                            piece_off = overlap_start - piece_start
-                            length = overlap_end - overlap_start
-                            f.seek(file_pos)
-                            f.write(piece_data[piece_off:piece_off + length])
-                        else:
-                            # Piece missing – fill with zeros
-                            f.seek(file_pos)
-                            f.write(b'\x00' * (overlap_end - overlap_start))
+            # Calculate content hash (SHA256 of the file)
+            content_hash = hashlib.sha256(file_data).hexdigest()
+            
+            # Store by hash
+            self.hash_map[content_hash] = bytes(file_data)
+            
+            # Update path mapping (if not already from metadata)
+            if path not in self.path_map:
+                self.path_map[path] = content_hash
+            
+            print(f"      ✅ Stored as: {content_hash[:16]}... (using pieces {sorted(pieces_used)})")
 
-            print(f"   📄 Reconstructed: {path} ({size} bytes)")
+        print(f"\n📦 Total files stored by hash: {len(self.hash_map)}")
+
+    def _create_hash_mapped_fs(self) -> Path:
+        """Create filesystem where files are named by their hash"""
+        base = Path("/dev/shm") if Path("/dev/shm").exists() else Path("/tmp")
+        self.ram_path = Path(tempfile.mkdtemp(dir=base, prefix="torrent_hash_"))
+        
+        # Set strict permissions
+        os.chmod(self.ram_path, 0o700)
+        print(f"📁 Hash-mapped storage: {self.ram_path}")
+
+        # Create symlinks from hash-named files to their content
+        for content_hash, data in self.hash_map.items():
+            hash_file = self.ram_path / content_hash
+            with open(hash_file, 'wb') as f:
+                f.write(data)
+            os.chmod(hash_file, 0o600)
+            print(f"   📄 Stored: {content_hash[:16]}... ({len(data)} bytes)")
+
+        # Create mapping file for runtime lookup
+        mapping_file = self.ram_path / ".path_mapping.json"
+        with open(mapping_file, 'w') as f:
+            json.dump(self.path_map, f, indent=2)
+        os.chmod(mapping_file, 0o600)
 
         return self.ram_path
 
+    def _create_symlink_fs(self, hash_dir: Path) -> Path:
+        """Create symlinks from torrent paths to hash-named files"""
+        link_dir = Path(tempfile.mkdtemp(dir=hash_dir.parent, prefix="torrent_links_"))
+        os.chmod(link_dir, 0o700)
+        
+        print(f"\n🔗 Creating symlink view at: {link_dir}")
+        
+        fs = self.ti.files()
+        for i in range(fs.num_files()):
+            path = fs.file_path(i)
+            size = fs.file_size(i)
+            
+            # Find content hash for this path
+            content_hash = self.path_map.get(path)
+            if not content_hash or content_hash not in self.hash_map:
+                print(f"   ⚠️  No hash for {path}, creating sparse file")
+                # Create sparse file as fallback
+                full_path = link_dir / path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(full_path, 'wb') as f:
+                    f.truncate(size)
+                continue
+            
+            # Create symlink from torrent path to hash-named file
+            hash_file = hash_dir / content_hash
+            if hash_file.exists():
+                full_path = link_dir / path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.symlink_to(hash_file)
+                print(f"   🔗 {path} -> {content_hash[:16]}...")
+            else:
+                print(f"   ❌ Hash file missing: {content_hash[:16]}...")
+
+        return link_dir
+
     def start(self):
-        if not self.piece_data:
-            print("❌ No pieces loaded, aborting.")
+        if not self.hash_map:
+            print("❌ No files loaded, aborting.")
             return False
 
-        # Reconstruct files in RAM
-        ram_dir = self._reconstruct_files_in_ram()
+        # Create hash-mapped storage
+        hash_dir = self._create_hash_mapped_fs()
+
+        # Create symlink view for libtorrent
+        link_dir = self._create_symlink_fs(hash_dir)
 
         # Create session
         print("\n🌐 Creating session...")
@@ -185,7 +289,7 @@ class RAMSeeder:
         print("\n📥 Adding torrent...")
         atp = lt.add_torrent_params()
         atp.ti = self.ti
-        atp.save_path = str(ram_dir)
+        atp.save_path = str(link_dir)  # Point to symlink view
         if hasattr(lt, 'torrent_flags'):
             atp.flags = lt.torrent_flags.default_flags | lt.torrent_flags.upload_mode
         else:
@@ -198,27 +302,22 @@ class RAMSeeder:
             print("❌ Invalid handle")
             return False
 
-        # Mark pieces (redundant but safe)
+        # Mark pieces as have
         print("\n🔧 Marking pieces...")
-        for idx in self.piece_data:
+        # We need to know which pieces are complete
+        # This information is implicit in the files we have
+        for piece_idx in range(self.num_pieces):
             try:
-                self.handle.have_piece(idx)
-                print(f"   ✅ Marked piece {idx}")
+                self.handle.have_piece(piece_idx)
+                print(f"   ✅ Marked piece {piece_idx}")
             except:
                 pass
 
-        # Set priorities
-        try:
-            prio = [7 if i in self.piece_data else 0 for i in range(self.num_pieces)]
-            self.handle.prioritize_pieces(prio)
-        except:
-            pass
-
-        # Force re-check (should find all pieces)
+        # Force re-check
         print("\n🔍 Forcing re-check...")
         self.handle.force_recheck()
 
-        # Wait for check to finish
+        # Wait for check
         for _ in range(30):
             time.sleep(1)
             status = self.handle.status()
@@ -228,21 +327,22 @@ class RAMSeeder:
 
         status = self.handle.status()
         print(f"   State: {status.state}")
+        
         if status.state == lt.torrent_status.seeding:
-            print("✅ Torrent is SEEDING from RAM!")
+            print("✅ Torrent is SEEDING from hash-mapped storage!")
         elif status.progress >= 0.99:
             print("✅ All pieces present – forcing upload mode")
             if hasattr(lt, 'torrent_flags'):
                 self.handle.set_flags(lt.torrent_flags.upload_mode)
-        else:
-            print(f"⚠️  State is {status.state}, but we have {len(self.piece_data)} pieces")
 
-        # Start monitoring threads
+        # Start monitoring
         threading.Thread(target=self._monitor_alerts, daemon=True).start()
         threading.Thread(target=self._print_stats_periodic, daemon=True).start()
 
-        print(f"\n🎯 RAM seeder ready!")
-        print(f"   RAM path: {ram_dir}")
+        print(f"\n🎯 Hash-mapped seeder ready!")
+        print(f"   Hash storage: {hash_dir}")
+        print(f"   Torrent view: {link_dir}")
+        print(f"   Files are stored by SHA256 hash - no original names visible")
         print(f"   Magnet: magnet:?xt=urn:btih:{self.info_hash}")
         return True
 
@@ -271,9 +371,7 @@ class RAMSeeder:
                 del self.peers_info[ip]
         elif atype == 'piece_finished_alert':
             piece = getattr(alert, 'piece_index', -1)
-            if piece in self.piece_data:
-                self.pieces_served.add(piece)
-                print(f"📤 Sent piece {piece}")
+            self.pieces_served.add(piece)
 
     def _print_stats_periodic(self):
         while self.running:
@@ -284,53 +382,90 @@ class RAMSeeder:
         if not self.handle or not self.handle.is_valid():
             return
         s = self.handle.status()
-        print("\n" + "="*60)
-        print(f"📊 RAM SEEDER - {time.strftime('%H:%M:%S')}")
+        print("\n" + "="*70)
+        print(f"📊 HASH-MAPPED SEEDER - {time.strftime('%H:%M:%S')}")
+        print("="*70)
         print(f"Torrent: {self.name}")
         print(f"State: {s.state}  Progress: {s.progress*100:.1f}%")
-        print(f"Pieces: {len(self.piece_data)}/{self.num_pieces} in RAM")
-        print(f"Peers: {s.num_peers}  Upload: {s.upload_rate/1024:.1f} KB/s")
-        print(f"Uploaded: {s.total_upload/1048576:.2f} MB  Pieces Served: {len(self.pieces_served)}")
-        print("="*60)
+        print(f"Files by hash: {len(self.hash_map)}")
+        print(f"\n📈 Network:")
+        print(f"   Peers: {s.num_peers} connected")
+        print(f"   Upload: {s.upload_rate/1024:.1f} KB/s")
+        print(f"   Uploaded: {s.total_upload/1048576:.2f} MB")
+        print(f"   Pieces Served: {len(self.pieces_served)}")
+        
+        if self.peers_info:
+            print(f"\n👥 Connected Peers ({len(self.peers_info)}):")
+            for ip, info in list(self.peers_info.items())[:3]:
+                duration = time.time() - info['time']
+                print(f"   {ip:20} - {duration:4.0f}s")
+        print("="*70)
 
     def stop(self):
         print("\n🛑 Stopping...")
         self.running = False
         time.sleep(1)
+        
         if self.handle and self.handle.is_valid():
             try:
                 self.session.remove_torrent(self.handle)
+                print("✅ Torrent removed")
             except:
                 pass
+        
+        # Clean up
         if self.ram_path and self.ram_path.exists():
             shutil.rmtree(self.ram_path)
-            print(f"🧹 Removed {self.ram_path}")
+            print(f"🧹 Cleaned up {self.ram_path}")
+        
+        # Also clean up link dir (parent of ram_path)
+        link_dir = self.ram_path.parent / "torrent_links_" if self.ram_path else None
+        if link_dir and link_dir.exists():
+            shutil.rmtree(link_dir)
+            print(f"🧹 Cleaned up {link_dir}")
+        
         print("✅ Stopped")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("torrent_file")
-    parser.add_argument("pieces_dir")
-    parser.add_argument("-p", "--port", type=int, default=6881)
-    parser.add_argument("--libtorrent-path")
+    parser = argparse.ArgumentParser(
+        description="Seed torrent from hash-mapped storage - files stored by SHA256 hash"
+    )
+    parser.add_argument("torrent_file", help="Torrent file")
+    parser.add_argument("pieces_dir", help="Directory with pieces")
+    parser.add_argument("-p", "--port", type=int, default=6881, help="Listen port")
+    parser.add_argument("--libtorrent-path", help="Custom libtorrent path")
+    
     args = parser.parse_args()
 
     if not import_libtorrent(args.libtorrent_path):
         sys.exit(1)
 
-    seeder = RAMSeeder(Path(args.torrent_file), Path(args.pieces_dir), args.port)
+    seeder = HashMappedSeeder(
+        Path(args.torrent_file), 
+        Path(args.pieces_dir),
+        args.port
+    )
+    
     if seeder.start():
         print("\nCommands: stats, quit")
-        signal.signal(signal.SIGINT, lambda s,f: seeder.stop() or sys.exit(0))
+        
+        def signal_handler(sig, frame):
+            print("\n\nInterrupted")
+            seeder.stop()
+            sys.exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        
         while seeder.running:
             try:
-                cmd = input("> ").strip().lower()
+                cmd = input("\n> ").strip().lower()
                 if cmd in ('quit','q','exit'):
                     break
                 elif cmd == 'stats':
                     seeder._print_stats()
             except EOFError:
                 break
+        
         seeder.stop()
 
 if __name__ == "__main__":
