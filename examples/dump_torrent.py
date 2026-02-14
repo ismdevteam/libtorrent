@@ -15,14 +15,36 @@ import os
 import hashlib
 import io
 
-# Try to import libtorrent with the custom path
-try:
-    sys.path.insert(0, '/tmp/libtorrent/build/bindings/python')
-    import libtorrent as lt
-    LIBTORRENT_AVAILABLE = True
-except ImportError:
-    print("Error: libtorrent not found. Please ensure libtorrent Python bindings are installed.", file=sys.stderr)
-    sys.exit(1)
+# Global variable to track libtorrent availability
+LIBTORRENT_AVAILABLE = False
+lt = None
+
+def import_libtorrent(custom_path: Optional[str] = None) -> bool:
+    """Import libtorrent, optionally from a custom path"""
+    global lt, LIBTORRENT_AVAILABLE
+    
+    # If custom path is provided, try to import from there first
+    if custom_path:
+        try:
+            sys.path.insert(0, custom_path)
+            import libtorrent as lt
+            LIBTORRENT_AVAILABLE = True
+            print(f"Using libtorrent from custom path: {custom_path}", file=sys.stderr)
+            return True
+        except ImportError:
+            print(f"Warning: Could not load libtorrent from custom path: {custom_path}", file=sys.stderr)
+            print("Falling back to system libtorrent...", file=sys.stderr)
+    
+    # Try system libtorrent
+    try:
+        import libtorrent as lt
+        LIBTORRENT_AVAILABLE = True
+        print("Using system libtorrent", file=sys.stderr)
+        return True
+    except ImportError:
+        print("Error: libtorrent not found in system paths.", file=sys.stderr)
+        LIBTORRENT_AVAILABLE = False
+        return False
 
 def extract_hashes_manually(torrent_data: bytes) -> tuple:
     """Manually extract v1 and v2 info hashes from torrent data"""
@@ -65,7 +87,7 @@ def extract_hashes_manually(torrent_data: bytes) -> tuple:
     
     return v1_hash, v2_hash
 
-def get_info_hashes(torrent_data: bytes, ti: lt.torrent_info) -> tuple:
+def get_info_hashes(torrent_data: bytes, ti) -> tuple:
     """Get v1 and v2 info hashes using multiple methods"""
     # Try to get from torrent_info first
     v1_hash = None
@@ -81,12 +103,12 @@ def get_info_hashes(torrent_data: bytes, ti: lt.torrent_info) -> tuple:
             # Try to get the real v1 hash manually
             real_v1_hash, real_v2_hash = extract_hashes_manually(torrent_data)
             
-            if real_v1_hash and real_v2_hash:
+            if real_v1_hash and real_v2_hash and real_v2_hash != real_v1_hash:
                 # We have both hashes from manual extraction
                 return real_v1_hash, real_v2_hash
             elif real_v1_hash:
                 # Only v1 hash from manual extraction
-                return real_v1_hash, v1_hash  # Use the truncated as v2
+                return real_v1_hash, None
                 
     except Exception as e:
         print(f"Warning: Could not get hashes from torrent_info: {e}", file=sys.stderr)
@@ -97,7 +119,7 @@ def get_info_hashes(torrent_data: bytes, ti: lt.torrent_info) -> tuple:
     
     return v1_hash, v2_hash
 
-def get_torrent_name(ti: lt.torrent_info, torrent_data: bytes) -> str:
+def get_torrent_name(ti, torrent_data: bytes) -> str:
     """Get the torrent name, handling edge cases to match dump_torrent output"""
     try:
         name = ti.name()
@@ -207,7 +229,7 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
         metadata['number of files'] = 0
     
     # Info hash - format exactly like dump_torrent
-    if v1_hash and v2_hash:
+    if v1_hash and v2_hash and v2_hash != v1_hash:  # Only show v2 if it's different
         metadata['info hash'] = f"{v1_hash}, {v2_hash}"
         metadata['info hash v1'] = v1_hash
         metadata['info hash v2'] = v2_hash
@@ -227,7 +249,7 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
         if v1_hash:
             magnet_parts.append(f"xt=urn:btih:{v1_hash}")
         
-        if v2_hash:
+        if v2_hash and v2_hash != v1_hash:
             magnet_parts.append(f"xt=urn:btmh:1220{v2_hash}")
         
         # Add trackers from torrent
@@ -258,6 +280,15 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
             st = ti.files()
             show_pad = kwargs.get('show_padfiles', False)
             
+            # In JSON mode, we want to show pad files by default to match dump_torrent2meta.py
+            # In dump mode, we don't show them unless explicitly requested
+            if 'dump_mode' in kwargs and kwargs['dump_mode']:
+                # In dump mode, use the show_pad flag
+                include_pad = show_pad
+            else:
+                # In JSON mode, always include pad files to match dump_torrent2meta.py
+                include_pad = True
+            
             # Calculate total size and offsets
             total_size = 0
             file_offsets = []
@@ -272,6 +303,20 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
                     file_size = st.file_size(i)
                     file_offset = file_offsets[i]
                     
+                    # Get file flags if available
+                    flags = 0
+                    if hasattr(st, 'file_flags'):
+                        flags = st.file_flags(i)
+                    
+                    # Check if this is a pad file
+                    is_pad = False
+                    if hasattr(lt.file_storage, 'flag_pad_file'):
+                        is_pad = bool(flags & lt.file_storage.flag_pad_file)
+                    
+                    # Skip pad files in dump mode unless explicitly requested
+                    if is_pad and not include_pad:
+                        continue
+                    
                     # Calculate piece range
                     piece_length = metadata['piece length']
                     if piece_length > 0 and file_size > 0:
@@ -281,21 +326,13 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
                         first_piece = 0
                         last_piece = 0
                     
-                    # Get file flags if available
+                    # Build flags string
                     flags_str = '----'
-                    is_pad = False
                     is_executable = False
                     is_hidden = False
                     is_symlink = False
                     
                     if hasattr(st, 'file_flags'):
-                        flags = st.file_flags(i)
-                        
-                        if hasattr(lt.file_storage, 'flag_pad_file'):
-                            is_pad = bool(flags & lt.file_storage.flag_pad_file)
-                            if is_pad and not show_pad:
-                                continue
-                        
                         # Build flags string
                         flags_chars = []
                         flags_chars.append('p' if (hasattr(lt.file_storage, 'flag_pad_file') and 
@@ -307,6 +344,10 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
                         flags_chars.append('l' if (hasattr(lt.file_storage, 'flag_symlink') and 
                                                   bool(flags & lt.file_storage.flag_symlink)) else '-')
                         flags_str = ''.join(flags_chars)
+                        
+                        is_executable = bool(flags & lt.file_storage.flag_executable) if hasattr(lt.file_storage, 'flag_executable') else False
+                        is_hidden = bool(flags & lt.file_storage.flag_hidden) if hasattr(lt.file_storage, 'flag_hidden') else False
+                        is_symlink = bool(flags & lt.file_storage.flag_symlink) if hasattr(lt.file_storage, 'flag_symlink') else False
                     
                     # Try to get root hash
                     root_hash = None
@@ -410,8 +451,50 @@ def parse_torrent_file(torrent_path: Path, **kwargs) -> Dict[str, Any]:
     # DHT nodes - usually not in .torrent files
     metadata['dht_nodes'] = []
     
-    # Web seeds
-    metadata['web seeds'] = []
+    # Web seeds - extract from torrent data (FIXED - filters duplicates and empty strings)
+    web_seeds = []
+    try:
+        decoded = lt.bdecode(torrent_data)
+        if decoded:
+            # Check for url-list (web seeds) - standard format
+            if b'url-list' in decoded:
+                url_list = decoded[b'url-list']
+                if isinstance(url_list, list):
+                    for url in url_list:
+                        if isinstance(url, bytes):
+                            try:
+                                url_str = url.decode('utf-8').strip()
+                                if url_str and url_str not in web_seeds:  # Skip empty and duplicates
+                                    web_seeds.append(url_str)
+                            except:
+                                pass
+                    # Special case: if we got a list with one empty string, it's probably no web seeds
+                    if len(web_seeds) == 1 and not web_seeds[0]:
+                        web_seeds = []
+                elif isinstance(url_list, bytes):
+                    try:
+                        url_str = url_list.decode('utf-8').strip()
+                        if url_str and url_str not in web_seeds:
+                            web_seeds.append(url_str)
+                    except:
+                        pass
+            
+            # Also check for httpseeds (alternative format used by some torrents)
+            if b'httpseeds' in decoded:
+                httpseeds = decoded[b'httpseeds']
+                if isinstance(httpseeds, list):
+                    for url in httpseeds:
+                        if isinstance(url, bytes):
+                            try:
+                                url_str = url.decode('utf-8').strip()
+                                if url_str and url_str not in web_seeds:
+                                    web_seeds.append(url_str)
+                            except:
+                                pass
+    except:
+        pass
+    
+    metadata['web seeds'] = web_seeds
     
     return metadata
 
@@ -522,7 +605,7 @@ def format_json_output(metadata: Dict[str, Any], pretty: bool = False) -> str:
     if 'dht_nodes' in metadata and metadata['dht_nodes']:
         output_metadata['dht_nodes'] = metadata['dht_nodes']
     
-    # Add files
+    # Add files (all files, including pads, in JSON mode)
     if 'files' in metadata:
         output_metadata['files'] = metadata['files']
     
@@ -566,6 +649,7 @@ def format_dump_output(metadata: Dict[str, Any]) -> str:
     
     # Files section (only non-pad files by default, matching original dump_torrent)
     if metadata.get('files'):
+        # In dump mode, only include non-pad files
         non_pad_files = [f for f in metadata['files'] if not f['is_pad']]
         if non_pad_files:
             lines.append("files:")
@@ -595,8 +679,10 @@ def format_dump_output(metadata: Dict[str, Any]) -> str:
     
     return "\n".join(lines)
 
-def get_torrent_metadata(torrent_path: Path, **kwargs) -> Dict[str, Any]:
+def get_torrent_metadata(torrent_path: Path, dump_mode: bool = False, **kwargs) -> Dict[str, Any]:
     """Get torrent metadata by parsing directly with libtorrent"""
+    # Pass dump_mode to parse_torrent_file to control pad file inclusion
+    kwargs['dump_mode'] = dump_mode
     metadata = parse_torrent_file(torrent_path, **kwargs)
     return enrich_metadata(metadata, torrent_path)
 
@@ -611,6 +697,7 @@ Examples:
   %(prog)s /tmp/torrent1.torrent -o metadata.json
   %(prog)s /tmp/torrent1.torrent --dump  # Output like dump_torrent
   %(prog)s /tmp/torrent1.torrent --show-padfiles  # Include pad files
+  %(prog)s /tmp/torrent1.torrent --libtorrent-path /path/to/libtorrent/build/bindings/python  # Use custom libtorrent
   %(prog)s /tmp/torrent1.torrent --items-limit 1000 --depth-limit 50
         """
     )
@@ -641,6 +728,11 @@ Examples:
         "--show-padfiles",
         action="store_true",
         help="Include pad files in output"
+    )
+    
+    parser.add_argument(
+        "--libtorrent-path",
+        help="Custom path to libtorrent Python bindings"
     )
     
     parser.add_argument(
@@ -675,8 +767,10 @@ Examples:
         print(f"Error: Torrent file not found: {torrent_path}", file=sys.stderr)
         sys.exit(1)
     
-    if not LIBTORRENT_AVAILABLE:
+    # Import libtorrent with custom path if specified
+    if not import_libtorrent(args.libtorrent_path):
         print("Error: libtorrent Python bindings not available.", file=sys.stderr)
+        print("Please install libtorrent or specify a custom path with --libtorrent-path", file=sys.stderr)
         sys.exit(1)
     
     try:
@@ -685,8 +779,8 @@ Examples:
                  if k in ['show_padfiles', 'items_limit', 'depth_limit', 'max_pieces', 'max_size'] 
                  and v is not None}
         
-        # Get metadata
-        metadata = get_torrent_metadata(torrent_path, **kwargs)
+        # Get metadata, passing dump_mode flag
+        metadata = get_torrent_metadata(torrent_path, dump_mode=args.dump, **kwargs)
         
         # Choose output format
         if args.dump:
